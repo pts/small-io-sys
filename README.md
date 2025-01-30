@@ -97,7 +97,8 @@ shell scripts, BusyBox syntax. These build tools are used (part of the
   decompressing *winboot.98s* from the downloaded KB311561 *311561usa8.exe*.
 * [unEXPACK](https://github.com/w4kfu/unEXEPACK): for decompressing the
   MSDCM part of io.sys
-* aPACK ([apack1p](https://github.com/pts/apack1p)) 1.00: for compressing
+* [aPACK](https://web.archive.org/web/20240424165219/https://ibsensoftware.com/products_aPACK.html)
+  ([apack1p](https://github.com/pts/apack1p)) 1.00: for compressing
   code and data (global variables, logo and MSDCM).
 * [Perl](https://www.perl.org/) 5.004\_04: for running data transformation
   script for which shell is too slow and AWK doesn't work (i.e. binary input
