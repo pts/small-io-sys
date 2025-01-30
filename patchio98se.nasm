@@ -22,7 +22,7 @@
 ; * Removed strange_change_io_sys and 2 functions used by it. (This made the compressed io.sys smaller.)
 ; * Replaced the two long run of MPADs with NULs. (This made the compressed io.sys smaller.)
 ; * Compressed the file after msload with APACK 1.00 (io7pack.pl).
-; * Added use of shorter, 2-sector msload (1024 bytes instead of 2048 bytes).
+; * Added use of shorter msload (832 bytes instead of 2048 bytes).
 ;
 ; Size (in bytes) after each step:
 ;
