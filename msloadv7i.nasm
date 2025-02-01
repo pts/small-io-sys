@@ -2,7 +2,7 @@
 ; msloadv7i.nasm: an improved implementation of MS-DOS v7 msload
 ; by pts@fazekas.hu at Mon Jan 13 10:52:15 CET 2025
 ;
-; Compile with: nasm-0.98.39 -O0 -w+orphan-labels -f bin -o IO.SYS.win98cdn7.1i msloadv7i.nasm
+; Compile with: nasm -O0 -w+orphan-labels -f bin -o IO.SYS.win98cdn7.1i msloadv7i.nasm
 ; Minimum NASM version required to compile: 0.98.39
 ;
 ; Improvements over MS-DOS 7.1 (particularly Windows 98 SE) msload:
@@ -32,12 +32,12 @@
 ; * 0...0x400: Interrupt table.
 ; * 0x400...0x500: BIOS data area.
 ; * 0x500...0x700: Unused.
-; * 0x700...0x40700: Load location of the msbio part of io.sys. We will load it, and then do the far jump `jmp 0x70:0'. Maximum io.sys file size: 256 KiB.
-; * 0x40700..0x40800: Our stack after cont_relocated. Memory address of its end: SS:0x800 == SS:BP. (See .setup_reloc_segment for alternative address values.)
-; * 0x40800..0x40c00: For non-TIGHT, our relocated msload code and data: CS:0x800 == DS:0x800 == ES:0x800 == SS:0x800 == SS:BP. Use `[bp-$$+var....]` for access, and `-rorg+var....` to get the address. (See .setup_reloc_segment for alternative address values.) The `-$$` is a displacement size optimization (from 2 to 1 byte).
-; * 0x40800..0x41000: For TIGHT, our relocated msload code and data: CS:0x800 == DS:0x800 == ES:0x800 == SS:0x800 == SS:BP.
-; * 0x40c00..0x40e00: For non-TIGHT, cached sector read from the FAT. (See .setup_reloc_segment for alternative address values.)
-; * 0x41000..0x41000: For TIGHT, cached sector read from the FAT. (See .setup_reloc_segment for alternative address values.)
+; * 0x700...0x40700: Load location of the msbio part of io.sys. We will load it, and then do the far jump `jmp 0x70:0'. Maximum io.sys file size after msload (i.e. msbio payload size): 256 KiB - 0x100 bytes.
+; * 0x40700..0x40800: (0x4000:0x700) Our stack after cont_relocated. Memory address of its end: SS:0x800 == SS:BP.
+; * 0x40800..0x40c00: (0x4000:0x800) For non-TIGHT, our relocated msload code and data: CS:0x800 == DS:0x800 == ES:0x800 == SS:0x800 == SS:BP. Use `[bp-$$+var....]` for access, and `-rorg+var....` to get the address. (See .setup_reloc_segment for alternative address values.) The `-$$` is a displacement size optimization (from 2 to 1 byte).
+; * 0x40800..0x41000: (0x4000:0x800) For TIGHT, our relocated msload code and data + msbio prefix: CS:0x800 == DS:0x800 == ES:0x800 == SS:0x800 == SS:BP. Same address, but longer than non-TIGHT.
+; * 0x40c00..0x40e00: (0x40b0:0x100) For non-TIGHT, cached sector read from the FAT.
+; * 0x41000..0x41400: (0x40f0:0x100) For TIGHT, cached sector read from the FAT.
 ;
 
 bits 16
@@ -140,7 +140,7 @@ CHS_OR_LBA:
 .CHS equ 0x90
 .LBA equ 0x0e  ; 0x0c may also indicate LBA.
 
-RELOC_BASE_SEGMENT equ 0x4000  ; Works with msbio payloads up to 256 KiB (== 0x4000 << 4 bytes).
+RELOC_BASE_SEGMENT equ 0x4000  ; Works with msbio payload size <= 256 KiB - 0x100 == (0x4000 << 4) - 0x100 bytes. 0x100 because of .copy_kernel_sector.
 
 msload:
 
@@ -183,7 +183,7 @@ load_code:
 		cld
 .setup_reloc_segment:
 		;mov ax, ((end-mz_header)>>4)  ; Just behind the msbio payload.
-		mov ax, RELOC_BASE_SEGMENT  ; Work with msbio payloads up to 256 KiB - 0x100 bytes.
+		mov ax, RELOC_BASE_SEGMENT
 		mov es, ax
 		push cs
 		pop ds
@@ -232,9 +232,9 @@ load_code:
 		mov di, -rorg+msload
 		push di
 %ifdef TIGHT
-		mov cx, (tight_msload_sector_end-msload)>>1  ; Copy 0x400 bytes.
+		mov cx, (tight_msload_sector_end-msload)>>1  ; Copy 0x400 bytes: 0x340 bytes of msload code and 0x4c0 bytes of msbio prefix.
 %else
-		mov cx, 0x400>>1
+		mov cx, 0x400>>1  ; Copy 0x200 bytes: <=0x340 bytes of msload code and data would be enough.
 %endif
 		rep movsw  ; Copy CX<<1 bytes (the msloadv7i code and data) from DS:SI to ES:DI.
 		; Copy BPB from the loaded boot sector (SS:BP+0xb) to its final location (ES:0x70b).
@@ -268,7 +268,7 @@ initialized_data:
 var.single_cached_fat_sec_ofs: dd 0
 var.is_fat12: db 0  ; 1 for FAT12, 0 otherwise.
 var.skip_sector_count: db MSLOAD_SECTOR_COUNT+EXTRA_SKIP_SECTOR_COUNT
-var.fat_cache_segment: dw RELOC_BASE_SEGMENT+0xc0-0x10+(EXTRA_SKIP_SECTOR_COUNT<<5)  ; Right after the relocated copy of our code.
+var.fat_cache_segment: dw RELOC_BASE_SEGMENT+0xc0-0x10+(EXTRA_SKIP_SECTOR_COUNT<<5)  ; Right after the relocated copy of our code. !! This depends on TIGHT.
 %if $-msload>=0x80
   %error INIIALIZED_DATA_ENDS_TOO_LATE  ; This prevents single-byte-displacement optimization, e.g. [bp-$$+0x7f] is single-byte, [bp-$$+0x80] is two bytes.
   dw 1/0
@@ -289,7 +289,7 @@ initialized_data.end:
 		mov dl, [bp-$$+var.drive_number]  ; Windows 98 SE boot sector doesn't pass DL to msload. This is only correct for FAT32. We get it later for non-FAT32.
 		mov bp, di  ; BP := 0x800.
 		cli
-		mov ss, ax
+		mov ss, ax  ; RELOC_BASE_SEGMENT.
 		mov sp, bp
 		sti
 		mov ax, [bp-$$+bpb.sectors_per_fat_fat1x]
@@ -300,7 +300,7 @@ initialized_data.end:
 		mov [bp-$$+var.sectors_per_fat+2], cx  ; 0.
 .done_sectors_per_fat:
 		mov [bp-$$+var.drive_number], dl  ; msbio needs it here, no matter the filesystem.
-		push ds
+		push ds  ; RELOC_BASE_SEGMENT.
 		mov ax, -rorg+cont_relocated
 		push ax
 		retf
@@ -499,7 +499,7 @@ detect_fat12:  ; Input: CX == 0.
 
 read_msbio:
 %ifdef TIGHT
-		mov ax, 0x70+(EXTRA_SKIP_SECTOR_COUNT<<5)
+		mov ax, 0x70+(EXTRA_SKIP_SECTOR_COUNT<<5)  ; 0x70+2*0x20 == 0xb0.
 		mov es, ax
 %else
 		mov es, [bp-$$+jump_to_msbio.jmp_far_inst+3]  ; 0x70.
@@ -562,11 +562,12 @@ read_kernel_sector:  ; Now: CX is sectors per cluster; DX:AX is sector offset (L
 		push cx  ; Save (CX == sectors per cluster).
 		mov si, 0x100
 %ifdef TIGHT
-		mov di, tight_msload_sector_end-tight_msbio_payload-(EXTRA_SKIP_SECTOR_COUNT<<9)  ; 0xc0.
+		mov di, tight_msload_sector_end-tight_msbio_payload-(EXTRA_SKIP_SECTOR_COUNT<<9)  ; 0xc0. Bytes between 0x70:0 and 0x70:0xc0 will be copied to from sector 1 (0x70+:0x340) loaded by the boot sector.
 %else
 		xor di, di
 %endif
 		mov cx, si  ; Copy 1 sector: 0x200 bytes from 0x80+:0 to 0x70+:0. We read to 0x80 (a multiple of 0x20) because of sector wraparound protection (https://retrocomputing.stackexchange.com/a/31157), but the load protocol needs 0x70.
+.copy_kernel_sector:
 		es rep movsw  ; Copy CX words from ES:SI to ES:DI.
 		mov si, es
 		lea si, [si+0x20]
@@ -579,8 +580,9 @@ read_kernel_sector:  ; Now: CX is sectors per cluster; DX:AX is sector offset (L
 
 jump_to_msbio:
 		; No need to pop anything, msbio v7 (START$, then INIT in bios/msinit.asm) doesn't look at the stack.
+		; Now: SS == RELOC_BASE_SEGMENT == 0x4000; SP == 0x800-4 (the cluster number (dword) is pushed).
 		;call print_dot  ; For debugging.
-%ifdef TIGHT
+%ifdef TIGHT  ; Copy bytes from sector 1 (0x70+:0x340) loaded by the boot sector to 0x70:0 and 0x70:0xc0.
 		mov si, -rorg+tight_msbio_payload
 		mov es, [bp-$$+jump_to_msbio.jmp_far_inst+3]  ; 0x70.
 		xor di, di
