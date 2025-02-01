@@ -807,7 +807,10 @@ print_dot:  ; For debugging.
 %else
 		times 0x400-($-msload) db '-'
   assert_fofs 0x400
-		times ((MSLOAD_SECTOR_COUNT-2)<<9)-2 db 0
+		times ((MSLOAD_SECTOR_COUNT-2)<<9)-2-8 db 0
+		db 'ML7I'  ; Signature.
+		dw 0  ; Original io.sys has this as date_min, propagated as AX to msbio. We just hardcode AX == 0 before jumping to msbio.
+		dw 0  ; Original io.sys has this as date_max, propagated as BX to msbio. We just hardcode BX == 0 before jumping to msbio.
 		db 'MS'  ; Magic bytes which nobody checks.
   msload_end:
 %endif
