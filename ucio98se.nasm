@@ -141,6 +141,164 @@ assert_hfofs 0x18
 assert_hfofs MSLOAD_PARA_SIZE<<4
 assert_fofs 0x800
 
+%if 0  ; For debugging.
+		incbin_until_fofs 0x10d7  ; INIT+4.
+init: equ $-4
+init4:		call .here  ; Save offset of .here.
+.here:		pushf  ; Save.
+		push dx ; Save.
+		mov dx, 'ax'
+		call print_kv
+		mov dx, 'bx'
+		mov ax, bx
+		call print_kv
+		mov dx, 'cx'
+		mov ax, cx
+		call print_kv
+		mov dx, 'dx'
+		pop ax  ; Restore DX to AX.
+		call print_kv
+
+		mov dx, 'si'
+		mov ax, si
+		call print_kv
+		mov dx, 'di'
+		mov ax, di
+		call print_kv
+		mov dx, 'bp'
+		mov ax, bp
+		call print_kv
+		mov dx, 'fl'
+		pop ax  ; Restore FLAGS to AX.
+		call print_kv
+
+		call print_crlf
+
+		mov dx, 'cs'
+		mov ax, cs
+		call print_kv
+		mov dx, 'ip'
+		pop ax  ; Restore .here to AX.
+		sub ax, strict word .here-init
+		call print_kv
+
+		mov dx, 'ds'
+		mov ax, ds
+		call print_kv
+
+		mov dx, 'es'
+		mov ax, es
+		call print_kv
+
+		mov dx, 'ss'
+		mov ax, ss
+		call print_kv
+
+		mov dx, 'sp'
+		mov ax, sp
+		call print_kv
+
+		call print_crlf
+
+.dump_bpb:	push ss
+		pop ds
+		mov si, bp
+		mov cx, 0x62
+		mov al, ' '
+		call print_1c
+.again:		lodsb
+		call print_al_hex
+		loop .again
+		call print_crlf
+
+.poweroff:  ; ATX power managmenet power off. https://superuser.com/questions/1094409/how-do-i-auto-turn-off-a-dos-only-machine-using-software-the-pc-has-no-power-sw
+		mov ax, 0x5301
+		xor bx, bx
+		int 0x15
+		mov ax, 0x530e
+		xor bx, bx
+		mov cx, 0x0102
+		int 0x15
+		mov ax, 0x5307
+		xor bx, bx
+		inc bx
+		mov cx, 0x0003
+		int 0x15
+
+.hlt:		cli
+.hang:		hlt
+		jmp short .hang	 ; In case the `hlt' didn't work.
+
+
+print_crlf:  ; Prints CRLF to the QEMU debug console.
+		push dx  ; Save.
+		push ax  ; Save.
+		mov dx, 0xe9  ; QEMU debug console (qemu-system-i386 -debugcon stdio) port.
+		mov al, 13  ; CR.
+		out dx, al
+		mov al, 10  ; LF.
+		out dx, al
+		pop ax  ; Restore.
+		pop dx  ; Restore.
+		ret
+
+print_1c:  ; Prints byte in AL to the QEMU debug console.
+		push dx  ; Save.
+		mov dx, 0xe9  ; QEMU debug console (qemu-system-i386 -debugcon stdio) port.
+		out dx, al
+		pop dx  ; Restore.
+		ret
+
+print_kv:  ; Prints DX with print_2cd, then prints AX with print_AX to the QEMU debug console.
+		xchg ax, dx
+		call print_2cd
+		xchg ax, dx
+		call print_ax_hex
+		ret
+
+print_2cd:  ; Prints space, byte in AL, byte in AH, colon to the QEMU debug console.
+		push dx  ; Save.
+		mov dx, 0xe9  ; QEMU debug console (qemu-system-i386 -debugcon stdio) port.
+		push ax  ; Save.
+		mov al, ' '
+		out dx, al
+		pop ax  ; Restore.
+		out dx, al
+		xchg al, ah
+		out dx, al
+		xchg al, ah
+		push ax  ; Save.
+		mov al, ':'
+		out dx, al
+		pop ax  ; Restore.
+		pop dx  ; Restore.
+		ret
+
+print_ax_hex:  ; Prints word in AL as 4 hex digits to the QEMU debug console.
+		xchg al, ah
+		call print_al_hex
+		xchg al, ah
+		; Fall through.
+print_al_hex:  ; Prints byte in AL as 2 hex digits to the QEMU debug console.
+		push ax  ; Save.
+		push dx  ; Save.
+		mov dx, 0xe9  ; QEMU debug console (qemu-system-i386 -debugcon stdio) port.
+		aam 0x10
+		xchg al, ah
+		call .print_nibble  ; Print high nibble.
+		xchg al, ah
+		call .print_nibble  ; Print low nibble.
+		pop dx ; Restore.
+		pop ax  ; Restore.
+		ret
+.print_nibble:	add al, '0'
+		cmp al, '9'
+		jna .adjusted
+		add al, 'a'-'0'-10
+.adjusted:	out dx, al
+		ret
+%endif
+
 patch_fofs_ab1 0x54c2, 0x5702, db 0  ; Replace `times 0x90 db 'MPAD'` with NULs, for better compression.
 
 ; C;\logo.sys, if available, still works: wget https://archive.org/download/win95-logo.sys/logo.sys
