@@ -81,7 +81,23 @@ if ($signature eq "MZ" and $msdcm_nblocks) {  # Already fixed, just check.
   $msdcm_maxalloc = fix_minmaxalloc($msdcm_maxalloc, $orig_nblocks, $orig_hdrsize, $msdcm_nblocks, $hdrsize);
   die("fatal: bad new image size: $infn\n") if $image_size != length($_);
 }
-if ($image_size) {  # Do some additional checks.
+my $msloadsize = (substr($_, 0x340 - 4, 4) eq "ML7I") ? 0x340 : (substr($_, 0x400 - 4, 4) eq "ML7I") ? 0x400 : (substr($_, 0x800 - 2, 2) eq "MS") ? 0x800 : 0;
+die "fatal: missing msload in io.sys file: $infn\n" if !$msloadsize;
+if ($msloadsize != 0x800 or substr($_, 0x800 - 10, 4) eq "ML7I") {  # Check $rdseg.
+  my $msload = substr($_, 0, $msloadsize);
+  my $rbseg_fofs = 0x1a;
+  my($rbseg_code, $rbseg) = unpack("a2v", substr($msload, $rbseg_fofs - 2, 4));  # Typical $rbseg value: 0x4800.
+  die("fatal: bad reloc-base-segment code: $infn\n") if $rbseg_code ne "\xfc\xb8";  # cld ++ mov ax, RELOC_BASE_SEGMENT.
+  die("fatal: bad reloc-base-segment value: $infn\n") if $rbseg < 0x3400 or $rbseg > 0x5000;  # Other values may work, this is just a sanity check.
+  my $var_fat_cache_segment_fofs = index($msload, "\x5b\x5b\xeb\x09\x90");  # pop bx ++ pop bx ++ jmp short initialized_data.end ++ nop.
+  die("fatal: initialized_data not found in msload: $infn\n") if $var_fat_cache_segment_fofs < 0 or $var_fat_cache_segment_fofs > 0x80;  # Typical value is 0x61.
+  $var_fat_cache_segment_fofs += 5 + 4 + 2;
+  my $var_fat_cache_segment = unpack("v", substr($msload, $var_fat_cache_segment_fofs, 2));
+  die("fatal: bad var_fat_cache_segment value in msload: $infn\n") if
+      # This corresponds to `var.fat_cache_segment: dw RELOC_BASE_SEGMENT+0xc0-0x10+(EXTRA_SKIP_SECTOR_COUNT<<5)' in msloadv7i.nasm.
+      $var_fat_cache_segment != $rbseg + 0xc0 - 0x10 + ((length($msload) == 0x340) << 6);
+}
+if ($image_size) {  # Do some additional checks if MSDCM is present.
   my $initialized_mem_size = ($image_size - ($hdrsize << 4));
   die("fatal: image size is smaller than hdrsize: $infn\n") if $initialized_mem_size < 0;
   my $mem_size = $initialized_mem_size + ($msdcm_minalloc or 0xffff) << 4;
