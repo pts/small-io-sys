@@ -12,7 +12,7 @@ Byte sizes:
 * 138477 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
 * 128365 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbuml*
 * 72617 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbpc*
-* 70396 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbpl*
+* 70393 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbpl*
 
 How to use: build it, then overwrite io.sys with the just-built smaller
 alternative on your boot floppies (bothe bare metal and floppy disk image)
@@ -69,12 +69,16 @@ and then `dir /a`.
 * The msload part of io.sys (first 2048 bytes) have been rewritten from
   scratch in 8086 assembly. The new size is only 832 bytes.
 * The kernel (msbio.bin, msdos.bin) code and data have been compressed
-  using aPACK 1.00.
-* The compressed boot logo has been decompressed and recompressed using
-  aPACK 1.00. The kernel code and data and the boot logo have been
-  concatenated, and compressed together.
+  using aPACK 1.00 and UPX 3.91, and the shorter output has been chosen.
+* The compressed boot logo has been decompressed and recompressed together
+  in the same batch as (i.e. concatenated to) the kernel code and data.
+* Alternatively, the LZMA algorithm and file format supported by UPX 3.91
+  has also been used for compressing the kernel code and data and the boot
+  logo. The output of this is smaller, but it takes longer to decompress at
+  boot time (0.5 to 1 seconds extra in an emulator).
 * MSDCM code and data have been decompressed and recompressed. using aPACK
-  1.00 16-bit DOS .exe compression.
+  1.00 and UPX 3.91 16-bit DOS .exe compression. Again, the shorter
+  output (aPACK) has been chosen.
 * The boot logo and MSDCM have been removed from some binaries.
   * It's possible, but less entertaining to boot the Windows GUI even
     without this boot logo. Also an external *logo.sys* can be used to
@@ -103,7 +107,9 @@ shell scripts, BusyBox syntax. These build tools are used (part of the
   ([apack1p](https://github.com/pts/apack1p)) 1.00: for compressing
   code and data (global variables, logo and MSDCM).
 * [UPX](https://upx.github.io/) 3.91: for compressing code and data (global
-  variables and logo) with the LZMA algorithm and format.
+  variables and logo) with the LZMA algorithm and format. Also used for
+  regular (LZSS) compression, and its output is chosen if shorter than than
+  the output of aPACK.
 * [Perl](https://www.perl.org/) 5.004\_04: for running data transformation
   script for which shell is too slow and AWK doesn't work (i.e. binary input
   and output), for example decompressing the boot logo (splash screen)

@@ -23,17 +23,19 @@ use strict;
 my $apack1p_prog;  # https://github.com/pts/apack1p
 my $upx_prog;  # https://upx.github.io/  For our needs (LZMA compression), UPX 3.91--4.2.4 produce identical results.
 my $do_ignores_logo = 0;
-my $compressor;
+my $apack1p_compressor;
+my $upx_compressor;
 for (my $i = 0; $i < @ARGV; ++$i) {
   my $arg = $ARGV[$i];
   if ($arg eq "--") { splice(@ARGV, 0, $i + 1); last }
   elsif ($arg eq "-" or $arg !~ m@^-@) { splice(@ARGV, 0, $i); last }
-  elsif ($arg =~ m@^--apack1p=(.*)@s) { $apack1p_prog = $1; $compressor = "apack1p" }
-  elsif ($arg =~ m@^--upx=(.*)@s) { $upx_prog = $1; $compressor = "upx" }
-  elsif ($arg =~ m@^--upx-?lzma=(.*)@s) { $upx_prog = $1; $compressor = "upx-lzma" }
+  elsif ($arg =~ m@^--apack1p=(.*)@s) { $apack1p_prog = $1; $apack1p_compressor = "apack1p" }
+  elsif ($arg =~ m@^--upx=(.*)@s) { $upx_prog = $1; $upx_compressor = "upx" }
+  elsif ($arg =~ m@^--upx-?lzma=(.*)@s) { $upx_prog = $1; $upx_compressor = "upx-lzma" }
   elsif ($arg eq "--ignores-logo") { $do_ignores_logo = 1 }
   else { die "fatal: unknown command-line flag: $arg\n" }
 }
+my $compressor = defined($upx_compressor) ? $upx_compressor : $apack1p_compressor;
 die "Usage: $0 [<flag> ...] <input.sys> <output.sys>\n" if @ARGV != 2;
 die "fatal: compressor not chosen, specify at least one of --apack1p=..., --upx=... and --upx-lzma=...\n" if !defined($compressor);
 my $infn = $ARGV[0];
@@ -59,7 +61,7 @@ sub write_file($$) {
 
 $_ = read_file($infn);
 my $insize = length($_);
-my($msload, $init_ofs, $rbseg, $rbseg_fofs, $var_fat_cache_segment_fofs);
+my($msload, $upx_init_ofs, $rbseg, $rbseg_fofs, $var_fat_cache_segment_fofs, $apack1p_udata);
 my($msdcm_image, $msdcm_minallocx, $msdcm_ss, $msdcm_sp, $msdcm_ip, $msdcm_cs);
 {
   die "fatal: not an io.sys file: $infn\n" if substr($_, 0, 2) ne "MZ" or substr($_, 0x200, 2) ne "BJ";
@@ -104,13 +106,19 @@ my($msdcm_image, $msdcm_minallocx, $msdcm_ss, $msdcm_sp, $msdcm_ip, $msdcm_cs);
   die "fatal: bad var_fat_cache_segment value in msload: $infn\n" if  # Also checked in fixmsdcm.pl.
       # This corresponds to `var.fat_cache_segment: dw RELOC_BASE_SEGMENT+0xc0-0x10+(EXTRA_SKIP_SECTOR_COUNT<<5)' in msloadv7i.nasm.
       $var_fat_cache_segment != $rbseg + 0xc0 - 0x10 + ((length($msload) == 0x340) << 6);
+  if (defined($upx_compressor) and defined($apack1p_compressor)) {
+    $apack1p_udata = $_;
+    $lastsize = ($insize & 0x1ff);
+    $nblocks = ($insize + 0x1ff) >> 9;
+    substr($apack1p_udata, 0, 0x18) = pack("a2v11", $signature, $lastsize, $nblocks, $nreloc, $hdrsize, $minalloc, $maxalloc, $ss, $sp, $checksum, $ip, $cs);
+  }
   if ($compressor =~ m@^upx@) {
     die "fatal: bad jmp-near-init opcode: $infn\n" if substr($_, $msloadsize, 1) ne "\xe9";  # Opcode of `jmp strict near INIT'.
-    $init_ofs = unpack("v", substr($_, $msloadsize + 1, 2)) + 3;  # Offset of `INIT' code in msbio. Segment is is 0x70.
-    die "fatal: bad init offset: $infn\n" if $init_ofs < 3 or $init_ofs >= 0x8003;
-    die "fatal: bad start code: $infn\n" if substr($_, $msloadsize + $init_ofs, 4) ne "\xfa\xfc\x2b\xf6";  # cli ++ cld ++ sub si, si.
+    $upx_init_ofs = unpack("v", substr($_, $msloadsize + 1, 2)) + 3;  # Offset of `INIT' code in msbio. Segment is is 0x70.
+    die "fatal: bad init offset: $infn\n" if $upx_init_ofs < 3 or $upx_init_ofs >= 0x8003;
+    die "fatal: bad start code: $infn\n" if substr($_, $msloadsize + $upx_init_ofs, 4) ne "\xfa\xfc\x2b\xf6";  # cli ++ cld ++ sub si, si.
     substr($_, $msloadsize, 3) = "\xfa\x17\xc3";  # replace_start_code: cli ++ pop ss ++ ret.
-    substr($_, $msloadsize + $init_ofs, 4) = "\x61\xfc\x17\x90";  # popa ++ cld ++ pop ss ++ nop.  # popa needs at least 186 CPU.
+    substr($_, $msloadsize + $upx_init_ofs, 4) = "\x61\xfc\x17\x90";  # popa ++ cld ++ pop ss ++ nop.  # popa needs at least 186 CPU.
     #substr($_, $msloadsize, 8) = "\xba\xe9\x00\xb0\x43\xee\xfa\xf4";  # Debug msbio payload: write C to QEMU console, and halt. This takes about 0.5 in QEMU, because LZMA decompression is slow.
     #my $regdump_code = read_file("regdump.com"); substr($_, $msloadsize, length($regdump_code)) = $regdump_code;  # Debug msbio payload: dump all registers and halt.
     substr($_, 0x3c, 4) = "\0\0\0\0" if $hdrsize >= 4;  # Prevent UPX from failing to detect this DOS MZ .exe as an NE, LE or PE.
@@ -132,20 +140,34 @@ my($msdcm_image, $msdcm_minallocx, $msdcm_ss, $msdcm_sp, $msdcm_ip, $msdcm_cs);
   substr($_, 0, 0x18) = pack("a2v11", $signature, $lastsize, $nblocks, $nreloc, $hdrsize, $minalloc, $maxalloc, $ss, $sp, $checksum, $ip, $cs);
 }
 
-my $ufn = "apack1.tmp";  # !! Use temporary filenames depending on the input file. Maybe only one file.
-my $cfn = "apack2.tmp";  # !! Use temporary filenames depending on the input file. Maybe only one file.
+my $ufn = "apack1.tmp";  # Compression input. !! Use temporary filenames depending on the input file. Maybe only one file.
+my $cfn = "apack2.tmp";  # Compressed output. !! Use temporary filenames depending on the input file. Maybe only one file.
 unlink($ufn, $cfn);
 write_file($ufn, $_);
 $_ = undef;  # Save memory.
-my @compress_cmd = ($compressor eq "upx-lzma") ? ($upx_prog, "--lzma", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
-    ($compressor eq "upx") ? ($upx_prog, "--no-lzma", "--no-reloc", "--ultra-brute", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
-    ($compressor eq "apack1p") ? ($apack1p_prog, "-q", "-1", $ufn, $cfn) : die();
-print(STDERR "info: running compress cmd: @compress_cmd\n");  # TODO(pts): Escape arguments.
-die "fatal: error running $compressor: $compress_cmd[0]\n" if system(@compress_cmd);
-die "fatal: apack2.tmp not created\n" if !-f($cfn);
-
-$_ = read_file($cfn);
+sub compress($) {
+  my($compressor) = @_;
+  my @compress_cmd = ($compressor eq "upx-lzma") ? ($upx_prog, "--lzma", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
+      ($compressor eq "upx") ? ($upx_prog, "--no-lzma", "--no-reloc", "--ultra-brute", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
+      ($compressor eq "apack1p") ? ($apack1p_prog, "-q", "-1", $ufn, $cfn) : die();
+  print(STDERR "info: running compress cmd: @compress_cmd\n");  # TODO(pts): Escape arguments.
+  die "fatal: error running $compressor: $compress_cmd[0]\n" if system(@compress_cmd);
+  die "fatal: compressed output file not created: $cfn\n" if !-f($cfn);
+  my $cdata = read_file($cfn);
+  unlink($cfn);
+  my $outsize_estimate = length($cdata) + 3 * !$do_ignores_logo + (($compressor eq "upx-lzma") ? 36 + 3 : ($compressor eq "upx") ? 36 + 6 : ($compressor eq "apack1p") ? 6 - 0xb : die());
+  ($compressor, $cdata, $outsize_estimate)
+}
+my($used_compressor, $cdata, $outsize_estimate) = compress($compressor);
+if (defined($upx_compressor) and defined($apack1p_compressor)) {
+  write_file($ufn, $apack1p_udata);
+  $apack1p_udata = undef;  # Save memory.
+  my($compressor3, $cdata3, $outsize_estimate3) = compress($apack1p_compressor);
+  ($used_compressor, $cdata, $outsize_estimate) = ($compressor3, $cdata3, $outsize_estimate3) if $outsize_estimate3 < $outsize_estimate;
+  print(STDERR "info: chosen better compressor: $used_compressor\n");
+}
 unlink($ufn, $cfn);
+($_, $cdata) = ($cdata, undef);  # Save memory.
 my $outsize;
 {
   die "fatal: compressed output not a DOS .exe file: $cfn\n" if substr($_, 0, 2) ne "MZ";
@@ -174,10 +196,10 @@ my $outsize;
     printf(STDERR "info: increasing rbseg: old=0x%x new=0x%x new_vfcs=0x%x vfcs_fofs=0x%x\n", $rbseg, $min_rbseg, $new_var_fat_cache_segment, $var_fat_cache_segment_fofs);
     substr($msload, $rbseg_fofs, 2) = pack("v", $min_rbseg);
     substr($msload, $var_fat_cache_segment_fofs, 2) = pack("v", $new_var_fat_cache_segment);
-    $rbseg = $min_rbseg;  # For `if ($compressor =~ m@^upx@)' below.
+    $rbseg = $min_rbseg;  # For `if ($used_compressor =~ m@^upx@)' below.
   }
   my $msbio_passed_para_count = ($insize - length($msload)) >> 4; # Same as load_para_count in msbio. Passed in DI from msload to msbio.
-  if ($compressor =~ m@^upx@) {
+  if ($used_compressor =~ m@^upx@) {
     die "fatal: bad nreloc in compressed output: $cfn\n" if $cnreloc != 0;
     my($reg_init_code, $do_set_es_to_psp);
     if (substr($_, $chdrsize << 4, 5) eq "\x16\x07\xbb\x00\x80") {  # push ss ++ pop es ++ mov bx, 0x8000. Only true for the output of `upx --lzma'.
@@ -200,10 +222,10 @@ my $outsize;
         $do_set_es_to_psp ? "\x8e\xc4" : "",  # mov es, sp  ; Fake PSP segment for DOS MZ .exe.
         "\xbc", pack("v", 0x700 - ((0x70 - 0x10) << 4)),  # mov sp, 0x700-((0x70-0x10)<<4)  # mov sp, 0x100
         "\x68", pack("v", $rbseg),  # push strict word 0x4800 ; Segment for the second `pop ss'. This push needs at least 186 CPU.
-        "\xbf" . pack("v", $msbio_passed_para_count),  # mov di, $msbio_passed_para_count
+        ($do_ignores_logo ? "" : "\xbf" . pack("v", $msbio_passed_para_count)),  # mov di, $msbio_passed_para_count
         "\x31\xf6",  # xor si, si  ; Instead of the `sub si, si` in the start code.
         "\x60",  # pusha  ; For the popa. Needs at least 186 CPU. The `popa' also needs at least 186 CPU.
-        "\x68", pack("v", $init_ofs),  # push strict word 0x8d3  ; Offset for the ret. This push needs at least 186 CPU.
+        "\x68", pack("v", $upx_init_ofs),  # push strict word 0x8d3  ; Offset for the ret. This push needs at least 186 CPU.
         "\xbc", pack("v", $css + 0x70),  # mov sp, mz_header_compressed.ss+0x70
         "\x8e\xd4",  # mov ss, sp
         $do_set_es_to_psp ? "" : "\x8e\xc4",  # mov es, sp
@@ -216,14 +238,14 @@ my $outsize;
         #"\xee",  # out dx, al  ; Debug: Write AL == 'B' to MSBIO console.
         $reg_init_code,
         "\xea", pack("vv", $cip + 5, $ccs + 0x70));  # jmp 0x70:5  ; Jump to decompressor code, after 5 bytes.
-    die "fatal: assert: bad decompressor code size\n" if length($before_decompressor_code) != 39 + length($reg_init_code);
+    die "fatal: assert: bad decompressor code size\n" if length($before_decompressor_code) != 36 + 3 * !$do_ignores_logo + length($reg_init_code);
     #my $regdump_code = read_file("regdump.com"); substr($before_decompressor_code, 14) = $regdump_code;  # Debug msbio payload: dump all registers and halt.
     my $before_decompressor_addr = 0x700 + length($_) - ($chdrsize << 4);
     substr($_, $chdrsize << 4, 5) = pack("avv", "\xea", $before_decompressor_addr & 0xf, $before_decompressor_addr >> 4);
     #write_file("t.bin", $before_decompressor_code);
     $outsize = length($_) + length($before_decompressor_code);
     $_ .= $before_decompressor_code;
-  } else {
+  } else {  # apack1p.
     die "fatal: bad nreloc in compressed output: $cfn\n" if $cnreloc != 1;
     die "fatal: bad crelocpos in compressed output: $cfn\n" if $crelocpos != 0x1c;
     my($reloc0ofs, $reloc0seg) = unpack("vv", substr($_, $crelocpos, 4));
@@ -235,14 +257,15 @@ my $outsize;
     die "fatal: unexpected APACK-compressed MZ trailer code bytes: $trailer_code\n" if $trailer_code ne "071f8ed033e4ea00000000";
     my $trailer_code2 = $do_ignores_logo ? "\x61\xea\0\0\x70\0" :  # popa ++ jmp 0x70:0. Please note that `popa' and the self-extractor code uses 186 instructions, thus it will (silently) fail on the 8086.
         "\x61\xbf" . pack("v", $msbio_passed_para_count) . "\xea\0\0\x70\0";  # \xbf is: mov di, the value is msbio_passed_para_count, same as load_para_count.
-    #$outsize = length($_) - 0xb + length($trailer_code2);
-    $outsize = length($_) - 0xb + length($trailer_code2);
+    die "fatal: assert: bad trailer code size\n" if length($trailer_code2) - 0xb != 6 - 0xb + 3 * !$do_ignores_logo;
+    $outsize = length($_) + length($trailer_code2) - 0xb;
     substr($_, $chdrsize << 4, 2) = "\x60\x90";  # We must not change the size, hence we add a nop (\x90).
     substr($_, -0xb) = $trailer_code2;
   }
   #substr($_, $chdrsize << 4, 8) = "\xba\xe9\x00\xb0\x41\xee\xfa\xf4";  Debug msbio payload: write A to QEMU console, and halt.
   #substr($_, $chdrsize << 4, 9) = "\xb8\x41\x0e\x31\xdb\xcd\x10\xfa\xf4";  # Debug msbio playload: write to the emulated screen, and halt.
   die "fatal: assert: bad outsize 1\n" if length($_) != $outsize;
+  die "fatal: assert: bad outsize estimate: esitimate=$outsize_estimate actual=$outsize: $cfn\n" if $outsize != $outsize_estimate;
   $outsize += length($msload) - ($chdrsize << 4);
   #$_ .= "\0" x (-length($_) & 0xf);  # No need to pad file size to a multiple of 0x10, msloadv7i works without such padding. For MSDCM, we will pad it later.
   my $hdrsize = ($outsize + 0xf) >> 4;
