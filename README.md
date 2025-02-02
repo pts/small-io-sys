@@ -61,7 +61,7 @@ For your convenience, the build process (*compile.sh*) will generate a
 bootable floppy disk image, which you can try in QEMU (*qemu-system-i386*).
 *compile.sh* prints the exact command to run to start QEMU. Within the black
 QEMU window, the *Starting Windows 98...* message appears, and then the
-*C:\\>* prompt appears. If you don't know which command to run, try `ver`
+*A:\\>* prompt appears. If you don't know which command to run, try `ver`
 and then `dir /a`.
 
 ## Techniques used to reduce the file size of io.sys
