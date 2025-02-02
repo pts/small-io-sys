@@ -6,6 +6,10 @@ at the expense of a few milliseconds of additional waiting for the
 decompression at boot time. For completeness and speed measurements,
 uncompressed variants are also supplied.
 
+**TL;DR Where are the download links?** There are no direct download links.
+To get the io.sys files below, you have to follow the build instructions
+below. It takes less than a minute if you aready have Linux running.
+
 Byte sizes:
 
 * 222670 bytes, original Windows 98 SE io.sys released by Microsoft in [KB311561](https://web.archive.org/web/20070510143604/http://support.microsoft.com/kb/311561) ([backup link](https://www.betaarchive.com/wiki/index.php?title=Microsoft_KB_Archive/311561)): *winboot.98s*
