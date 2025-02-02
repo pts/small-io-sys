@@ -2,8 +2,12 @@
 *.tmp
 *.bin
 *.img
+windows-*.preinst.conf
 /winboot.98s
 /command.com
 /311561usa8.exe
 /winboot.98s.good
 /IO.SYS.win98sekb*
+/upx1l.ndisasm.txt
+/COMMAND.COM.*
+/MSDOS.SYS.*

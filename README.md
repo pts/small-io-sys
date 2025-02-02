@@ -9,8 +9,10 @@ uncompressed variants are also supplied.
 Byte sizes:
 
 * 222670 bytes, original Windows 98 SE io.sys released by Microsoft in [KB311561](https://www.betaarchive.com/wiki/index.php?title=Microsoft_KB_Archive/311561): *winboot.98s*
-* 139373 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
+* 138477 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
+* 128365 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbuml*
 * 72617 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbpc*
+* 70396 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbpl*
 
 How to use: build it, then overwrite io.sys with the just-built smaller
 alternative on your boot floppies (bothe bare metal and floppy disk image)
@@ -100,6 +102,8 @@ shell scripts, BusyBox syntax. These build tools are used (part of the
 * [aPACK](https://web.archive.org/web/20240424165219/https://ibsensoftware.com/products_aPACK.html)
   ([apack1p](https://github.com/pts/apack1p)) 1.00: for compressing
   code and data (global variables, logo and MSDCM).
+* [UPX](https://upx.github.io/) 3.91: for compressing code and data (global
+  variables and logo) with the LZMA algorithm and format.
 * [Perl](https://www.perl.org/) 5.004\_04: for running data transformation
   script for which shell is too slow and AWK doesn't work (i.e. binary input
   and output), for example decompressing the boot logo (splash screen)

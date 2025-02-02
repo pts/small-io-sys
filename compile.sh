@@ -19,6 +19,7 @@ perl=tools/miniperl-5.004.04.upx
 nasm=tools/nasm-0.98.39.upx
 mtools=tools/mtools-4.0.18.upx
 apack1p=tools/apack1p-1.00.upx
+upx=tools/upx-3.91.upx
 unexepack=tools/pts-unexepack-v1.upx
 
 # Downloads:
@@ -63,7 +64,7 @@ test "$(sha256sum command.com)" = "c3b5899620d6c58b90727b640bb7bb6a723f6013629c9
 "$perl" -x logod.pl --fofs=0x1e010 winboot.98s IO.SYS.win98sekb.bmp
 "$unexepack" -q winboot.98s IO.SYS.win98sekb.msdcm
 
-"$apack1p" -q -3 -h IO.SYS.win98sekb.msdcm IO.SYS.win98sekb.msdcmc
+"$apack1p" -q -3 -h IO.SYS.win98sekb.msdcm IO.SYS.win98sekb.msdcmc  # !! Automatically try both --apack1p and --upx here, find the better one.
 
 "$nasm" -DNOPATCH -O0 -w+orphan-labels -f bin -DNOPATCH -o IO.SYS.win98sekb patchio98se.nasm
 cmp winboot.98s IO.SYS.win98sekb
@@ -76,17 +77,22 @@ cmp winboot.98s IO.SYS.win98sekb
 #"$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=2 -o IO.SYS.win98sekb2 patchio98se.nasm  # Uses msloadv7s2.bin.
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -o IO.SYS.win98sekb0 patchio98se.nasm  # Uses msloadv7s0.bin.
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DOPTIMIZE_FOR_COMPRESSION -o IO.SYS.win98sekbp patchio98se.nasm  # Uses msloadv7s0.bin.
-"$perl" -x io7pack.pl --apack1p="$apack1p" --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpc
+"$perl" -x fixmsdcm.pl IO.SYS.win98sekbp  # No need for fixing, this just does some checks.
+"$perl" -x io7pack.pl --apack1p="$apack1p" --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpc  # !! Automatically try both --apack1p and --upx here, find the better one. --apack1p wins here.
+"$perl" -x io7pack.pl --upx-lzma="$upx"    --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpl
 
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -o IO.SYS.win98sekbu ucio98se.nasm  # Uses msloadv7s0.bin.
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DOPTIMIZE_FOR_COMPRESSION -o IO.SYS.win98sekbuu ucio98se.nasm  # Uses msloadv7s40bin.
-"$perl" -x io7pack.pl --apack1p="$apack1p" IO.SYS.win98sekbuu IO.SYS.win98sekbuc
+"$perl" -x fixmsdcm.pl IO.SYS.win98sekbuu  # No need for fixing, this just does some checks.
+"$perl" -x io7pack.pl --upx="$upx"      IO.SYS.win98sekbuu IO.SYS.win98sekbuc  # !! Automatically try both --apack1p and --upx here, find the better one. --upx wins here.
+"$perl" -x io7pack.pl --upx-lzma="$upx" IO.SYS.win98sekbuu IO.SYS.win98sekbul
 
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DMSDCM -o IO.SYS.win98sekbum ucio98se.nasm  # Uses msloadv7s4.bin.
-"$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DMSDCM -DOPTIMIZE_FOR_COMPRESSION -o IO.SYS.win98sekbumu ucio98se.nasm  # Uses msloadv7s0.bin.
 "$perl" -x fixmsdcm.pl IO.SYS.win98sekbum
+"$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DMSDCM -DOPTIMIZE_FOR_COMPRESSION -o IO.SYS.win98sekbumu ucio98se.nasm  # Uses msloadv7s0.bin.
 "$perl" -x fixmsdcm.pl IO.SYS.win98sekbumu  # !! TODO(pts): Combine this with io7pack.pl, to make .minalloc smaller.
-"$perl" -x io7pack.pl --apack1p="$apack1p" IO.SYS.win98sekbumu IO.SYS.win98sekbumc
+"$perl" -x io7pack.pl --upx="$upx"       IO.SYS.win98sekbumu IO.SYS.win98sekbumc  # !! Automatically try both --apack1p and --upx here, find the better one. --upx wins here.
+"$perl" -x io7pack.pl --upx-lzma="$upx"  IO.SYS.win98sekbumu IO.SYS.win98sekbuml
 
 # ---
 
