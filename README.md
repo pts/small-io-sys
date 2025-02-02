@@ -7,8 +7,9 @@ decompression at boot time. For completeness and speed measurements,
 uncompressed variants are also supplied.
 
 **TL;DR Where are the download links?** There are no direct download links.
-To get the io.sys files below, you have to follow the build instructions
-below. It takes less than a minute if you aready have Linux running.
+To get the io.sys file variants listed below, you have to follow the build
+instructions in this document. It takes less than a minute if you already
+have Linux running.
 
 Byte sizes:
 
@@ -19,11 +20,12 @@ Byte sizes:
 * 70393 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbpl*
 
 How to use: build it, then overwrite io.sys with the just-built smaller
-alternative on your boot floppies (bothe bare metal and floppy disk image)
-or Windows 98 SE systems installed to your HDD partitions (both bare metal
-and disk image for emulators). If you don't have it installed, but still
-want to try small-io-sys quickly, then boot the built floppy disk image
-*fd.img* in QEMU (see instructions as part of the build instrunctions).
+alternative on your boot floppies (both physical hardware and floppy disk
+image) or Windows 98 SE systems installed to your HDD partitions (both bare
+metal and disk image for emulators). If you don't have a Windows 98 system
+installed, but still want to try small-io-sys quickly, then boot the built
+floppy disk image *fd.img* in QEMU (see instructions as part of the build
+instructions).
 
 See also docs about the [structure of MS-DOS v7 (and Windows ME)
 io.sys](https://retrocomputing.stackexchange.com/a/15598), incuding the
@@ -32,17 +34,17 @@ details on what MSDCM does.
 ## How to build it
 
 There are no prebuilt binaries. To get a working io.sys, you have to build
-everything from source. Part of source is the [winboot.98s file within
+everything from sources and originals. The original file is the [winboot.98s
+file within
 KB311561](https://web.archive.org/web/20020204073516/http://download.microsoft.com/download/win98/patch/22527/w98/en-us/311561usa8.exe)
-(downloaded automatically if needed as part of the build), all other sources
-are files and the build tools are part of the small-io-sys Git repository.
+(downloaded automatically if needed as part of the build). Everything else
+(source files and build tools) is part of the small-io-sys Git repository.
 
-To build from source (except for winboot.98s, from which binary code and
-data is extracted and reused), you need a Linux i386 or amd64 system. (In
-the future, maybe a build system will be provided for Win32 as well.)
-Emulation (such as WSL2) and containers (such as Docker) also work fine. The
-Linux distribution doesn't matter, because the build tool programs are
-provided as statically linked Linux i386 executables.
+To build it, you need a Linux i386 or amd64 system. (In the future, a build
+system could be provided for native Win32 as well.) Emulation (such as WSL2)
+and containers (such as Docker) also work fine. The build process works on
+any Linux distribution, because the build tool programs are provided as
+statically linked Linux i386 executables.
 
 To build small-io-sys, clone the Git repository and run compile.sh. More
 specifically, run these commands in a Linux i368 or amd64 terminal
@@ -55,7 +57,7 @@ $ ./compile.sh
 ```
 
 This will download *winboot.98s*, and generate the other files (such as
-*IO.SYS.win98sekbumc* and *IO.SYS.win98sekbpc*). For the boot
+*IO.SYS.win98sekbumc* and *IO.SYS.win98sekbpc*, see above). For the boot
 in QEMU, it also downloads a copy of Windows 98 SE *command.com*, and adds
 it to the floppy disk image.
 
@@ -70,16 +72,20 @@ and then `dir /a`.
 
 ## Techniques used to reduce the file size of io.sys
 
-* The msload part of io.sys (first 2048 bytes) have been rewritten from
+* The msload part of io.sys (the first 2048 bytes) have been rewritten from
   scratch in 8086 assembly. The new size is only 832 bytes.
 * The kernel (msbio.bin, msdos.bin) code and data have been compressed
   using aPACK 1.00 and UPX 3.91, and the shorter output has been chosen.
 * The compressed boot logo has been decompressed and recompressed together
   in the same batch as (i.e. concatenated to) the kernel code and data.
-* Alternatively, the LZMA algorithm and file format supported by UPX 3.91
+* The LZMA algorithm and file format supported by UPX 3.91
   has also been used for compressing the kernel code and data and the boot
   logo. The output of this is smaller, but it takes longer to decompress at
-  boot time (0.5 to 1 seconds extra in an emulator).
+  boot time (0.5 to 1 seconds extra in an emulator). *compile.sh* generates
+  io.sys output files both with LZMA compression (small output, slow to
+  decompress, compressed by UPX) and LZSS compression (larger output, very
+  fast to decompress, compressed by aPACK and UPX, and the smaller is
+  chosen).
 * MSDCM code and data have been decompressed and recompressed. using aPACK
   1.00 and UPX 3.91 16-bit DOS .exe compression. Again, the shorter
   output (aPACK) has been chosen.
@@ -89,20 +95,21 @@ and then `dir /a`.
     restore this functionality.)
   * It's possible to boot the Windows GUI even without MSDCM in most
     installations, i.e. those which don't use multiple hardware profiles.
-* Unused code, now-unused support code (such as the decompressor for the
-  compressed boot logo) and now-unused message strings have been overwritten
-  with NULs to make subsequent compression more efficient.
+* Originally unused code, newly unused support code (such as the
+  decompressor for the compressed boot logo) and newly unused message
+  strings have been overwritten with NULs to make subsequent compression
+  more efficient.
 
 ## Build tools used
 
 Most of the additional code is written in i386 assembly language, NASM
 dialect, and the rest are short Perl scripts. The build is automated in
-shell scripts, BusyBox syntax. These build tools are used (part of the
-[tools/](tools/) directory:
+shell scripts, BusyBox syntax. The following build tools are used (they are in
+the [tools/](tools/) directory):
 
 * [NASM](https://nasm.us/) 0.98.39: Netwide Assember for building the msload
   binary, patching and cutting io.sys, building the floppy boot sector code,
-  generating the floppy disk image.
+  and generating the floppy disk image.
 * [cabextract](https://www.cabextract.org.uk/): for extracting and
   decompressing *winboot.98s* from the downloaded KB311561 *311561usa8.exe*.
 * [unEXPACK](https://github.com/w4kfu/unEXEPACK): for decompressing the
@@ -120,9 +127,9 @@ shell scripts, BusyBox syntax. These build tools are used (part of the
   embedded in *winboot.98s*.
 * [BusyBox](https://www.busybox.net/): for running shell scripts and doing
   some data processing (such as *sha256sum*).
-* [Mtools](https://www.gnu.org/software/mtools/): for copying files to/from
-  FAT disk images (e.g. copying *io.sys* and *command.com* to the bootable
-  floppy disk image).
+* [Mtools](https://www.gnu.org/software/mtools/) 4.0.18: for copying files
+  to/from FAT disk images (e.g. copying *io.sys* and *command.com* to the
+  bootable floppy disk image).
 
 Copies of these build tool programs precompiled for Linux i386 (also runs on
 amd64) are provided in the small-io-sys Git repostory, there is no need to
