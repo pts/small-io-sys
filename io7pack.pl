@@ -23,7 +23,7 @@ use strict;
 my $apack1p_prog;  # https://github.com/pts/apack1p
 my $upx_prog;  # https://upx.github.io/  For our needs (LZMA compression), UPX 3.91--4.2.4 produce identical results.
 my $do_ignores_logo = 0;
-my $compressor = "apack";
+my $compressor;
 for (my $i = 0; $i < @ARGV; ++$i) {
   my $arg = $ARGV[$i];
   if ($arg eq "--") { splice(@ARGV, 0, $i + 1); last }
@@ -35,6 +35,7 @@ for (my $i = 0; $i < @ARGV; ++$i) {
   else { die "fatal: unknown command-line flag: $arg\n" }
 }
 die "Usage: $0 [<flag> ...] <input.sys> <output.sys>\n" if @ARGV != 2;
+die "fatal: compressor not chosen, specify at least one of --apack1p=..., --upx=... and --upx-lzma=...\n" if !defined($compressor);
 my $infn = $ARGV[0];
 my $outfn = $ARGV[1];
 
@@ -136,12 +137,9 @@ my $cfn = "apack2.tmp";  # !! Use temporary filenames depending on the input fil
 unlink($ufn, $cfn);
 write_file($ufn, $_);
 $_ = undef;  # Save memory.
-die "fatal: error reopening stdin as /dev/null" if
-    !open(STDIN, "< /dev/null");  # Otherwise apack.exe doesn't make progress in dosbox-nox-1.
 my @compress_cmd = ($compressor eq "upx-lzma") ? ($upx_prog, "--lzma", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
     ($compressor eq "upx") ? ($upx_prog, "--no-lzma", "--no-reloc", "--ultra-brute", "--small", "-f", "-q", "-q", "-q", "-o", $cfn, $ufn) :
-    ($compressor eq "apack1p") ? ($apack1p_prog, "-q", "-1", $ufn, $cfn) :
-    ("./dosbox-nox-v1", "--cmd", "--mem-mb=3", "apack.exe", "-1", $ufn, $cfn);  # TODO(pts): Remove this.
+    ($compressor eq "apack1p") ? ($apack1p_prog, "-q", "-1", $ufn, $cfn) : die();
 print(STDERR "info: running compress cmd: @compress_cmd\n");  # TODO(pts): Escape arguments.
 die "fatal: error running $compressor: $compress_cmd[0]\n" if system(@compress_cmd);
 die "fatal: apack2.tmp not created\n" if !-f($cfn);
