@@ -9,7 +9,7 @@
 test "$0" = "${0%/*}" || cd "${0%/*}"
 export LC_ALL=C  # For deterministic output. Typically not needed. Is it too late for Perl?
 export TZ=GMT  # For deterministic output. Typically not needed. Perl respects it immediately.
-if test "$1" != --sh-script; then export OPATH="$PATH" export PATH=/dev/null/missing; exec tools/busybox sh "${0##*/}" --sh-script "$@"; exit 1; fi
+if test "$1" != --sh-script; then export OPATH="$PATH"; export PATH=/dev/null/missing; exec tools/busybox sh "${0##*/}" --sh-script "$@"; exit 1; fi
 shift
 test "$ZSH_VERSION" && set -y 2>/dev/null  # SH_WORD_SPLIT for zsh(1). It's an invalid option in bash(1), and it's harmful (prevents echo) in ash(1).
 set -ex
