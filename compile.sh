@@ -19,7 +19,7 @@ perl=tools/miniperl-5.004.04.upx
 nasm=tools/nasm-0.98.39.upx
 mtools=tools/mtools-4.0.18.upx
 apack1p=tools/apack1p-1.00.upx
-upx=tools/upx-3.91.upx
+upx=tools/upx-3.94.upx
 unexepack=tools/pts-unexepack-v1.upx
 
 # Downloads:
