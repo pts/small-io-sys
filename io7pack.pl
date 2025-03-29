@@ -25,6 +25,7 @@ my $upx_prog;  # https://upx.github.io/  For our needs (LZMA compression), UPX 3
 my $do_ignores_logo = 0;
 my $apack1p_compressor;
 my $upx_compressor;
+my $filter = 0;
 for (my $i = 0; $i < @ARGV; ++$i) {
   my $arg = $ARGV[$i];
   if ($arg eq "--") { splice(@ARGV, 0, $i + 1); last }
@@ -33,6 +34,7 @@ for (my $i = 0; $i < @ARGV; ++$i) {
   elsif ($arg =~ m@^--upx=(.*)@s) { $upx_prog = $1; $upx_compressor = "upx" }
   elsif ($arg =~ m@^--upx-?lzma=(.*)@s) { $upx_prog = $1; $upx_compressor = "upx-lzma" }
   elsif ($arg eq "--ignores-logo") { $do_ignores_logo = 1 }
+  elsif ($arg =~ m@^--filter=(.*)@s) { $filter = (int($1) or 0) }  # A non-zero filter value breaks the output, but is good for experimenting with compressibility.
   else { die "fatal: unknown command-line flag: $arg\n" }
 }
 my $compressor = defined($upx_compressor) ? $upx_compressor : $apack1p_compressor;
@@ -143,6 +145,46 @@ my($msdcm_image, $msdcm_minallocx, $msdcm_ss, $msdcm_sp, $msdcm_ip, $msdcm_cs);
 my $ufn = "apack1.tmp";  # Compression input. !! Use temporary filenames depending on the input file. Maybe only one file.
 my $cfn = "apack2.tmp";  # Compressed output. !! Use temporary filenames depending on the input file. Maybe only one file.
 unlink($ufn, $cfn);
+if ($filter) {  # Apply filter on $_. The filter must not change the .exe MZ header plus a few bytes (first 0x20 bytes in total) and the size.
+  # Similar to UPX 3.94 DOS .com filters: 1: f_ct16_e8, 2: f_ct16_e9, 3: f_ct16_e8e9, 4: f_ct16_e8_bswap_le, 5: f_ct16_e9_bswap_le, 6: f_ct16_e8e9_bswap_le.
+  #
+  # !! Apply filter 6 for real: save about 1429 (== 70393 - 68964) bytes (minus the filter code). Implement filter 6 in 8086 assembly manually, for longer than 64 KiB.
+  #    $ for FI in 1 2 3 4 5 6; do tools/miniperl-5.004.04.upx -x io7pack.pl '--upx-lzma=tools/upx-3.94.upx' --ignores-logo --filter="$FI" IO.SYS.win98sekbp IO.SYS.win98sekbplf"$FI"; done
+  #    $ ls -ld --sort=size IO.SYS.win98sekbplf? IO.SYS.win98sekbpl
+  #
+  # $ tools/miniperl-5.004.04.upx -x io7pack.pl '--upx-lzma=tools/upx-3.94.upx' --ignores-logo --filter=6 IO.SYS.win98sekbp IO.SYS.win98sekbplf6
+  # $ ~/prg/upxbc/upxbc --upx=upx.pts --flat32 --lzma -f -o apack0.tmp.lzma4x apack0.tmp
+  # info: read input: apack0.tmp (121632 bytes, format flat32)
+  # info: running with udata_size=121632 padding_size=0 udata2_size=0: upx.pts -qq --best --lzma -- apack0.tmp.lzma4x.tmp
+  # info: writing compressed output: apack0.tmp.lzma4x (71303 bytes, format flat32, method LZMA, filter none)
+  #
+  # !! Use i386 32-bit protected-mode LZMA decompressor, making it much faster (in QEMU). Unfortunately the predicted code size is much more (69762 > 68964), and the switching to protected mode will be on top of that.
+  #    The UPX LZMA decompressor for 8086 16-bit is ~1800 bytes (slow), and for i386 32-bit is ~2700 bytes. Maybe we can make the 32-bit code ~2500 bytes only by optimizing its surroundings.
+  # $ ~/prg/upxbc/upxbc --upx=upx.pts --flat32 --ultra-brute --no-filter -f -o apack3.tmp.lzma6 apack3.tmp
+  # info: read input: apack3.tmp (121632 bytes, format flat32)
+  # info: running with udata_size=121632 padding_size=0 udata2_size=0: upx.pts -qq --lzma --ultra-brute --no-filter -- apack3.tmp.lzma6.tmp
+  # info: writing compressed output: apack3.tmp.lzma6 (69762 bytes, format flat32, method LZMA, filter none)
+  write_file("apack0.tmp", substr($_, 0x20));  # For upxbc.
+  my $i_limit = length($_) - 2;
+  my $addvalue = -0x21;  # !! Is this absolutely correct?
+  if ($filter >= 1 and $filter <= 6) {
+    my $filter3 = $filter % 3;
+    my $e8 = ($filter3 == 1 or $filter3 == 0) ? 0xe8 : -1;
+    my $e9 = ($filter3 == 2 or $filter3 == 0) ? 0xe9 : -1;
+    my $packchar = ($filter >= 4) ? "n" : "v";
+    for (my $i = 0x20; $i < $i_limit; ++$i) {
+      my $v = vec($_, $i, 8);
+      if ($v == $e8 or $v == $e9) {
+        ++$i;
+        substr($_, $i, 2) = pack($packchar, ((unpack("v", substr($_, $i, 2)) + $addvalue + $i) & 0xffff));
+        ++$i;
+      }
+    }
+    write_file("apack3.tmp", substr($_, 0x20));  # For upxbc.
+  } else {
+    die "fatal: unknown filter: $filter\n";
+  }
+}
 write_file($ufn, $_);
 $_ = undef;  # Save memory.
 sub compress($) {
