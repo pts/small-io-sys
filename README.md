@@ -17,7 +17,7 @@ Byte sizes:
 * 138477 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
 * 128365 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbuml*
 * 72617 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbpc*
-* 68466 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA and custom decompressor: *IO.SYS.win98sekbplx*
+* 68270 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA and custom decompressor: *IO.SYS.win98sekbplx*
 
 How to use: build it, then overwrite io.sys with the just-built smaller
 alternative on your boot floppies (both physical hardware and floppy disk
@@ -99,7 +99,7 @@ and then `dir /a`.
   decompressor for the compressed boot logo) and newly unused message
   strings have been overwritten with NULs to make subsequent compression
   more efficient.
-* Before compressing io.sys, compression-enhancing filter has been applied.
+* Before compressing io.sys, a compression-enhancing filter has been applied.
   Various UPX filters (0x01--0x06, 0x46, 0x49) have been tried, and the
   smallest has been chosen. The winner is filter 0x06, which converts 16-bit
   near jump and near call instructions from relative to absolute address,
@@ -108,6 +108,9 @@ and then `dir /a`.
   Please note that the *upx* command-line tool doesn't even allow filter
   0x06 for 8086 (16-bit) code longer than 64 KiB, so the filter had to be
   applied manually before running UPX.
+* LZMA compression settings (e.g. preset, pb, lc, mf, nice) have been
+  manually tuned for this input, producing the smallest possible size using
+  `xz --format=lzma -9e --lzma1=...`.
 * The decompressor code has been rewritten in assembly and optimized for
   size. For example, in *IO.SYS.win98sekbplx*:
   * The decompressor mode switches to i386 protected mode for the duration

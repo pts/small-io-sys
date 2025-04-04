@@ -13,9 +13,8 @@ eval 'PERL_BADLANG=x;export PERL_BADLANG;exec perl -x "$0" "$@";exit 1'
 #     $ tools/miniperl-5.004.04.upx upxdc.pl --flat32 --prefix=0x340 --force-lzma --filter=0x49 ~/prg/small-io-sys/IO.SYS.win98sekbp IO.SYS.win98sekbplx
 #    But here it does correctly:
 #     $ tools/miniperl-5.004.04.upx upxdc.pl --flat32 --force-lzma --filter=0x49 memtest86+-5.01-dist.bin t
-# !!! Add 16-bit code to change to protected mode for decompression
-#     tools/miniperl-5.004.04.upx upxdc.pl --flat32 --prefix=0x340 --force-lzma --filter=6 ~/prg/small-io-sys/IO.SYS.win98sekbp IO.SYS.win98sekbplx
-#     info: written compressed output: IO.SYS.win98sekbplx (68373 bytes, format flat32, method LZMA, filter none, prefix 832 bytes)
+# !!! Sometimes (1 out of 10) Win98 decompression stucks at boot. It's flaky. Is it a QEMU bug? Does it happen to the uncompressed kernel? Does it happen if the kernel file is unchanged? Investigate.
+#
 
 BEGIN { $ENV{LC_ALL} = "C" }  # For deterministic output. Typically not needed. Is it too late for Perl?
 BEGIN { $ENV{TZ} = "GMT" }  # For deterministic output. Typically not needed. Perl respects it immediately.
@@ -74,12 +73,18 @@ sub does_method_match_category($$) {
       ($category eq "nrv2e") ? ($method >= 8 and $method <= 10) : 0
 }
 
+# TODO(pts): Implement filters 0x46 and 0x49 (with filter_cto), or add a wrapper which just runs upx(1) for the filter.
+sub is_filter_implemented($) {
+  my $filter = $_[0];
+  defined($filter) and $filter >= 0 and $filter <= 6
+}
+
 # Modifies $_[0] in place. $addvalue is used by filters 0x01..0x06, the value is 0x100 for .com, 0 for .sys.
 sub do_filter($$$$) {
   my($s, $filter, $filter_cto, $addvalue) = @_;
   return if !$filter;  # Filter none is a no-op.
   die("fatal: bad filter value: $filter\n") if $filter < 0 or $filter > 0xff;
-  die(sprintf("fatal: filter not implemented: %s\n", ($filters{$filter} or sprintf("0x%02x", $filter)))) if $filter > 6;
+  die(sprintf("fatal: filter not implemented: %s\n", ($filters{$filter} or sprintf("0x%02x", $filter)))) if !is_filter_implemented($filter);
   # This is an implementation of filters ct16_e8_le_0x01, ct16_e9_le_0x02,
   # ct16_e8e9_le_0x03, ct16_e8_be_0x04, ct16_e9_be_0x05, ct16_e8e9_be_0x06.
   # Based on upx-3.94-src/src/filter/ct.h . It is exactly the same as in UPX 3.94.
@@ -128,6 +133,60 @@ sub should_do_filter_in_wrapper($$) {
   1  # Do all other filters in the wrapper.
 }
 
+sub get_stats($$$) {
+  my($method, $filter, $filter_cto) = @_;
+  my $filter_cto_msg = exists($filters_with_cto{$filter}) ? sprintf(", filter cto 0x%02x", $filter_cto) : "";
+  "method $methods{$method}, filter $filters{$filter}$filter_cto_msg"
+}
+
+# This (unlike compress_upx_data32) allows the output file to be larger than the input.
+sub compress_xz_lzma1($$$$$$) {
+  my($udata_aryref, $tmpfn, $xz_prog, $lzma_settings, $desired_filter, $do_filter_in_wrapper) = @_;
+  my $usize = length($udata_aryref->[0]);
+  die("fatal: assert: filter must be done in wrapper\n") if $desired_filter and !$do_filter_in_wrapper;
+  do_filter($udata_aryref->[0], $desired_filter, 0, 0) if $do_filter_in_wrapper;  # TODO(pts): Autodetect filter_cto, just like UPX does. The current filters don't use it.
+  die("fatal: bad tmp file name for xz\n") if $tmpfn =~ m@[.](?:xz|lzma[12]?)\Z(?!\n)@i;
+  # xz(1) always creates a streamed LZMA1 file, i.e. usize unspecified, and containing an end-of-stream (EOS) == end-of-payload marker.
+  my @compress_cmd = ($xz_prog, "--format=lzma");
+  push @compress_cmd, $1 if $lzma_settings =~ s@^(-[^,]+),+@@;  # Example: -9e,pb=0 . preset=9e,pb=0 produces a different output file.
+  substr($lzma_settings, 0, 0) = ",";
+  my $dict_size_in;
+  if ($lzma_settings !~ m@,dict=@) {
+    $dict_size_in = ($usize < 0 or $usize > 0x7fffffff) ? 0x7fffffff : $usize < 4096 ? 4096 : $usize;
+    $lzma_settings .= ",dict=$dict_size_in";
+  }
+  $lzma_settings =~ s@^,+@@;
+  push @compress_cmd, "--lzma1=$lzma_settings" if $lzma_settings =~ y@,@@c;
+  push @compress_cmd, "--", $tmpfn;
+  write_file($tmpfn, pop(@$udata_aryref));
+  unlink("$tmpfn.lzma");
+  print(STDERR "info: running xz compressor: ", join(" ", map { shq($_) } @compress_cmd), "\n");
+  my $status = system(@compress_cmd);
+  unlink($tmpfn);
+  $tmpfn .= ".lzma";
+  if ($status) {
+    unlink($tmpfn);
+    die("fatal: error running xz compressor: $compress_cmd[0]\n");
+  }
+  my $s = read_file($tmpfn);
+  die("fatal: LZMA1 file too short for header\n") if length($s) < 13;
+  my($b, $dict_size, $usize_low, $usize_high) = unpack("CVVV", substr($s, 0, 13));
+  die("fatal: bad LZMA1 usize, expected streaming\n") if $usize_low != 0xffffffff and $usize_high != 0xffffffff;
+  die("fatal: LZMA1 file too short for data\n") if length($s) <= 13;
+  die("fatal: bad LZMA1 dict size\n") if ($dict_size < 4096 and $dict_size >= 0) or ($dict_size & ($dict_size - 1));
+  die("fatal: unexpected LZMA1 dict size: $dict_size\n") if defined($dict_size_in) and $dict_size > 4096 and $dict_size < $dict_size_in;
+  my $lc = $b % 9; $b /= 9;
+  my $lp = $b % 5; $b /= 5;
+  my $pb = $b;
+  die("fatal: bad LZMA1 pos_bits: $pb\n") if $pb > 4;
+  substr($s, 0, 13) = pack("CC", $pb | ($lc + $lp) << 3, $lc | $lp << 4);  # Replace LZMA1 header with UPX-style LZMA header.
+  my $method = M_LZMA; my $filter = ($desired_filter or 0); my $filter_cto = 0;
+  my $stats = get_stats($method, $filter, $filter_cto);
+  my $csize = length($s);
+  print(STDERR "info: xz compression results: $usize --> $csize bytes, $stats\n");
+  ($method, $filter, $filter_cto, $s)
+}
+
 # For technical reasons, even our patched UPX 3.94 cannot return a
 # compressed data string longer than the input (uncompressed data). Even if
 # they are equal in size, UPX will return the original uncompressed data
@@ -165,7 +224,7 @@ sub compress_upx_data32($$$$$$$$) {
       ($do_filter_in_wrapper or (defined($desired_filter) and !$desired_filter)) ? "--no-filter" :
       defined($desired_filter) ? sprintf("--filter=0x%02x", $desired_filter) : "--all-filters";
   my @compress_cmd = ($upx_prog, "-qq", @$method_flags, $filter_flag, "--", $tmpfn);  # !! TODO(pts): Redirect statistics printed by UPX from STDOUT to /dev/null.
-  print(STDERR "info: running compressor: ", join(" ", map { shq($_) } @compress_cmd), "\n");
+  print(STDERR "info: running UPX compressor: ", join(" ", map { shq($_) } @compress_cmd), "\n");
   die("fatal: error opening oldout: $!\n") if !open(OLDOUT, ">&STDOUT");
   my $to_dev_null = ">/dev/null";  # This is Unix-only, it should be ported to Windows.
   die("fatal: error reopening stdout: $!\n") if !open(STDOUT, $to_dev_null);  # To hide the file size debug message.
@@ -173,7 +232,8 @@ sub compress_upx_data32($$$$$$$$) {
   die("fatal: error reopening stdout: $!\n") if !open(STDOUT, ">&OLDOUT");
   die("fatal: error closing oldout: $!\n") if !close(OLDOUT);
   if ($status) {
-    die("fatal: error running compressor: $compress_cmd[0]\n")
+    unlink($tmpfn);
+    die("fatal: error running UPX compressor: $compress_cmd[0]\n")
   }
   $s = read_file($tmpfn);
   unlink($tmpfn);  # !! Also delete it on die(...) in read_file etc.
@@ -306,12 +366,7 @@ sub compress_upx_data32($$$$$$$$) {
     $s = undef;  # Save memory.
     ($method, $filter, $filter_cto) = ($b2_method, $b2_filter, $b2_filter_cto);
   }
-  # The filter doesn't change short data. Make it explicit so that the unfilter code doesn't have to check for overflows.
-  $filter = 0 if $usize <= 5 and (  # Corresponds to upx-3.94-src/src/filter/ct.h and upx-3.94-src/src/filter/ctok.h .
-      ($filter >= 1 and $filter <= 6 and $usize <= 3) or
-      ($filter == 0x46 or $filter == 0x49));
-  my $filter_cto_msg = exists($filters_with_cto{$filter}) ? sprintf(", filter cto 0x%02x", $filter_cto) : "";
-  my $stats = "method $methods{$method}, filter $filters{$filter}$filter_cto_msg";
+  my $stats = get_stats($method, $filter, $filter_cto);
   my $csize = length($cdata);
   print(STDERR "info: UPX compression results: $usize --> $csize bytes, $stats\n");
   die("fatal: desired method category $desired_method_category was not used, got method: $methods{$method}\n") if
@@ -324,7 +379,7 @@ sub compress_upx_data32($$$$$$$$) {
         ($filters{$filter} or sprintf("0x%02x", $filter))));
   }
   $filter = $desired_filter if $desired_filter and $do_filter_in_wrapper;  # Filter applied above by do_filter(...), so indicate it.
-  ($method, $filter, $filter_cto, $usize, $cdata, $stats)
+  ($method, $filter, $filter_cto, $cdata)
 }
 
 sub parse_upx_lzma_header($) {
@@ -414,7 +469,7 @@ sub parse_uint($) {
 
 # ---
 
-my $lzma_mode = 1;  # 0: no 1: yes; 2: both LZMA and no LZMA.
+my $lzma_mode = 1;  # 0: no LZMA 1: LZMA only; 2: both LZMA and no LZMA.
 my $desired_filter;
 my $desired_method_category;
 my $infn;
@@ -428,10 +483,12 @@ my @more_method_flags;
 my $nasm_ofmt = "bin";
 my $upx_tmpfmt = "elf";
 my $upx_prog;
+my $xz_prog;
 my $use_small_decompressor = 0;  # The small NRV2B decompressors may be slow or unstable, so don't enable them by default.
 my $skip0_size = 0;
 my $prefix_size = 0;
 my($flat16_segment, $flat16_offset);
+my $lzma_settings;
 my $do_update_hdrsize = 0;
 { my $i;
   for ($i = 0; $i < @ARGV; ++$i) {
@@ -454,11 +511,13 @@ my $do_update_hdrsize = 0;
     elsif ($arg eq "--format=raw" or $arg eq "--raw") { $ofmt = "raw" }  # Would be compatible with `lzma --format=raw' if the latter created LZMA1 streams.
     elsif ($arg =~ m@^--(?:format=)?(decompress32|flat32|flat16-386)(bin|elf|)\Z(?!\n)@) { $ofmt = $1; $nasm_ofmt = ($2 eq "elf") ? $2 : "bin" }
     elsif ($arg =~ s@^--format=@@) { die("fatal: unknown --format= value: $arg\n") }
+    elsif ($arg =~ s@^--lzma1=@@) { $lzma_mode = 1; $desired_method_category = "lzma"; $lzma_settings = $arg }  # To be passed to xz(1). Example: --lzma1=-9e,dict=512K,pb=0,lc=4,mf=bt4,nice=120
     elsif ($arg =~ m@^--flat16-386-start=([^:]+):([^:]+)\Z(?!\n)@) { ($flat16_segment, $flat16_offset) = map { parse_uint($_) } ($1, $2); $nasm_ofmt = "bin" if defined($ofmt) and $ofmt ne "flat16-386"; $ofmt = "flat16-386" }
     elsif ($arg =~ m@^--flat16-386-start=@) { die("fatal: unknown --flat16-386-start= value: $arg\n") }
     elsif ($arg =~ m@^--expert-upx-tmp-format=(elf|com|exe)\Z(?!\n)@) { $upx_tmpfmt = $1 }
     elsif ($arg =~ s@^--expert-upx-tmp-format=@@) { die("fatal: unknown --expert-upx-tmp-format= value: $arg\n") }
     elsif ($arg =~ s@^--upx=@@) { $upx_prog = $arg }
+    elsif ($arg =~ s@^--xz=@@) { $xz_prog = $arg }
     elsif ($arg eq "--compressed-lzmad=8" or $arg eq "--compressed-lzmad") { $compressed_lzmad = 8 }
     elsif ($arg eq "--compressed-lzmad=16") { $compressed_lzmad = 16 }
     elsif ($arg eq "--compressed-lzmad=32") { $compressed_lzmad = 32 }
@@ -480,6 +539,11 @@ my $do_update_hdrsize = 0;
   die("fatal: missing output filename\n") if !defined($outfn);
   die("fatal: missing outout --format=...\n") if !defined($ofmt);
 }
+if (defined($lzma_settings)) {
+  die("fatal: useless --lzma1=... settings, specify --force-lzma\n") if $lzma_mode != 1;
+  die("fatal: missing --filter=... or --no-filter for --lzma1=...\n") if !defined($desired_filter);
+  die(sprintf("fatal: desired filter not implemented for --lzma1=...: %s\n", ($filters{$desired_filter} or sprintf("0x%02x", $desired_filter)))) if !is_filter_implemented($desired_filter);
+}
 if ($selfdir !~ m@^/@) {  # This is Unix-only, it should be ported to Windows.
   my $dir = $0;
   $dir = "." if $dir !~ m@/@;  # Add a dot prefix so Unix won't try to find the tool on the $PATH.
@@ -498,6 +562,7 @@ my @upx_method_flags =
 # Even if --filter=... is specified, UPX 3.94 may still decide to use no filter if it makes the output shorter. (Sigh.)
 $selfdir = "." if !length($selfdir);
 $upx_prog = "$selfdir/tools/upx-3.94-lzma-eos.upx" if !defined($upx_prog);
+$xz_prog = "$selfdir/tools/xz-5.6.2-2ubuntu0.2.upx" if !defined($xz_prog);
 my $nasm_prog = "$selfdir/tools/nasm-0.98.39.upx";
 
 my $udata_aryref = [read_file($infn)];
@@ -517,8 +582,16 @@ if ($do_update_hdrsize) {
 }
 my $tmpfn = "$outfn.tmp";
 if ($upx_tmpfmt eq "com") { $tmpfn .= ".com" }  # Needed by UPX. No such requirement for DOS .exe though.
-my($method, $filter, $filter_cto, $usize, $cdata, $stats) = compress_upx_data32($udata_aryref, $tmpfn, \@upx_method_flags, $upx_prog, $upx_tmpfmt, $desired_filter, $desired_method_category, $do_filter_in_wrapper);
+my $usize = length($udata_aryref->[0]);
+my($method, $filter, $filter_cto, $cdata) =
+    defined($lzma_settings) ? compress_xz_lzma1($udata_aryref, $tmpfn, $xz_prog, $lzma_settings, $desired_filter, $do_filter_in_wrapper) :
+    compress_upx_data32($udata_aryref, $tmpfn, \@upx_method_flags, $upx_prog, $upx_tmpfmt, $desired_filter, $desired_method_category, $do_filter_in_wrapper);
+# The filter doesn't change short data. Make it explicit so that the unfilter code doesn't have to check for overflows.
+$filter = 0 if $usize <= 5 and (  # Corresponds to upx-3.94-src/src/filter/ct.h and upx-3.94-src/src/filter/ctok.h .
+    ($filter >= 1 and $filter <= 6 and $usize <= 3) or
+    ($filter == 0x46 or $filter == 0x49));
 my $csize = length($cdata);
+my $stats = get_stats($method, $filter, $filter_cto);
 if ($do_ignore_filter) {
   $filter = $filter_cto = 0;
   $stats =~ s@\bfilter .*@filter ignored@s;

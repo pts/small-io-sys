@@ -83,7 +83,7 @@ cmp winboot.98s IO.SYS.win98sekb
 "$perl" -x io7pack.pl --apack1p="$apack1p" --upx="$upx" --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpc
 "$perl" -x io7pack.pl --upx-lzma="$upx"                 --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpl
 # This compressor produces even smaller output than io7pack.pl: IO.SYS.win98sekbplx is ~1900 bytes shorter than IO.SYS.win98sekbpl.
-"$perl" -x upxdc.pl --flat16-386-start=0x70:0 --prefix=0x340 --update-hdrsize --force-lzma --filter=6 IO.SYS.win98sekbp IO.SYS.win98sekbplx
+"$perl" -x upxdc.pl --flat16-386-start=0x70:0 --prefix=0x340 --update-hdrsize --force-lzma --lzma1=-9e,pb=0,lc=4,mf=bt4,nice=120 --filter=6 IO.SYS.win98sekbp IO.SYS.win98sekbplx
 
 
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -o IO.SYS.win98sekbu ucio98se.nasm  # Uses msloadv7s0.bin.
