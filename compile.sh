@@ -81,6 +81,10 @@ cmp winboot.98s IO.SYS.win98sekb
 "$nasm" -O0 -w+orphan-labels -f bin -DMSLOAD_SECTOR_COUNT=0 -DOPTIMIZE_FOR_COMPRESSION -o IO.SYS.win98sekbp patchio98se.nasm  # Uses msloadv7s0.bin.
 "$perl" -x fixmsdcm.pl IO.SYS.win98sekbp  # No need for fixing, this just does some checks.
 "$perl" -x io7pack.pl --apack1p="$apack1p" --upx="$upx" --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpc
+# Even with --filter=6 here, the size of IO.SYS.win98sekbpl would be reduced
+# from 70384 to 68955 only (plus the size of the unfilter code), which is
+# larger than the size of IO.SYS.win98sekbplx. So if the user has a 386 CPU,
+# *plx is not only much faster, but also shorter than *pl.
 "$perl" -x io7pack.pl --upx-lzma="$upx"                 --ignores-logo IO.SYS.win98sekbp IO.SYS.win98sekbpl
 # This compressor produces even smaller output than io7pack.pl: IO.SYS.win98sekbplx is ~1900 bytes shorter than IO.SYS.win98sekbpl.
 "$perl" -x upxdc.pl --flat16-386-start=0x70:0 --prefix=0x340 --update-hdrsize --force-lzma --lzma1=-9e,pb=0,lc=4,mf=bt4,nice=120 --filter=6 IO.SYS.win98sekbp IO.SYS.win98sekbplx
