@@ -278,6 +278,20 @@ my $outsize;
     } else {
       die "fatal: bad decompressor starter code: $cfn: $infn\n";
     }
+    my $start_nop_count = 0;  # How many nops to add to the beginning.
+    if ($used_compressor ne "upx-lzma") {  # In LZMA-compressed UPX output, the $i offset below would be about 0x728, because the NRV2B-compressed LZMA decompressor precedes it.
+      my $sub = substr($_, ($chdrsize << 4), 0x70 - ($chdrsize << 4) - 0x1d + 6);
+      my $i = index($sub, "\xcb\x00UPX!") + ($chdrsize << 4) + 1;  # \xcb is the retf.
+      die "fatal: missing UPX PackHeader in compressed output: $cfn\n" if $i <= ($chdrsize << 4);
+      my $j = index($sub, "\x2e\x80\x6c\x12\x10") + ($chdrsize << 4);  # `sub byte [cs:si+0x12], 0x10'.
+      die "fatal: missing segment sub instruction in compressed output: $cfn\n" if $j <= ($chdrsize << 4) or  $j + 5 > $i;
+      $start_nop_count = 0x1c;  # Any value in 0..0x1c works.
+      #substr($_, $i, $start_nop_count) = "X" x $start_nop_count;  # These are arbitrary bytes, they can be overwritten. It works.
+      # Add `nop's to the start, move the code after it further.
+      vec($_, $j + 3, 8) += $start_nop_count;  # Update the 0x12 in the `sub byte [cs:si+0x12], 0x10'. This is because 0x12 is an offset within the code moved.
+      substr($_, $i, $start_nop_count) = "";
+      substr($_, ($chdrsize << 4), 0) = "\x90" x $start_nop_count;  # Add some `nop's to the start.
+    }
     my $before_decompressor_code = join("",  # Add code to be called before the decompressor:
         # Now (as set up by msloadv7i.nasm): SS == RELOC_BASE_SEGMENT == 0x4400; SP <= 0x800 (0x800 or a few bytes less), BP == 0x800, AX == 0, BX == 0, DI == msbio_passed_para_count == load_para_count == hdrsize - msload_para_size.
         "\xfa",  # cli  ; Prevent stack from being used while modifying SP below.
@@ -302,11 +316,11 @@ my $outsize;
         #"\xb0\x42",  # mov al, 'B'
         #"\xee",  # out dx, al  ; Debug: Write AL == 'B' to MSBIO console.
         $reg_init_code,
-        "\xea", pack("vv", $cip + 5, $ccs + 0x70));  # jmp 0x70:5  ; Jump to decompressor code, after 5 bytes.
-    die "fatal: assert: bad decompressor code size\n" if length($before_decompressor_code) != 36 + 3 * !$do_ignores_logo + length($reg_init_code);
+        "\xea", pack("vv", $cip + $start_nop_count + 5, $ccs + 0x70));  # jmp 0x70:(start_nop_count+5)  ; Jump to decompressor code, after 5 bytes.
+    die "fatal: assert: bad decompressor code size: $cfn\n" if length($before_decompressor_code) != 36 + 3 * !$do_ignores_logo + length($reg_init_code);
     #my $regdump_code = read_file("regdump.com"); substr($before_decompressor_code, 14) = $regdump_code;  # Debug msbio payload: dump all registers and halt.
     my $before_decompressor_addr = 0x700 + length($_) - ($chdrsize << 4);
-    substr($_, $chdrsize << 4, 5) = pack("avv", "\xea", $before_decompressor_addr & 0xf, $before_decompressor_addr >> 4);
+    substr($_, ($chdrsize << 4) + $start_nop_count, 5) = pack("avv", "\xea", $before_decompressor_addr & 0xf, $before_decompressor_addr >> 4);
     #write_file("t.bin", $before_decompressor_code);
     $outsize = length($_) + length($before_decompressor_code);
     $_ .= $before_decompressor_code;
@@ -315,7 +329,7 @@ my $outsize;
     my($reloc0ofs, $reloc0seg) = unpack("vv", substr($_, $crelocpos, 4));
     my $expected_reloc0_fofs = ($chdrsize << 4) + ($reloc0seg << 4) + $reloc0ofs;
     die "fatal: bad reloc0 fofs: $cfn\n" if $expected_csize - $expected_reloc0_fofs != 2;  # Patch the very last 2 bytes, i.e. the segmeint in the `jmp 0:0' instruction.
-    die "fatal: unexpected APACK-compressed MZ starter code bytes: $cfn\n" if substr($_, 0x20, 2) ne "\x1e\x06";
+    die "fatal: unexpected APACK-compressed MZ starter code bytes: $cfn\n" if substr($_, $chdrsize << 4, 2) ne "\x1e\x06";
     my $trailer_code = unpack("H*", substr($_, -0xb));
     # pop es ++ pop ds ++ mov ss, ax ++ xor sp, sp ++ jmp 0:0  # The segment of the jump would be modified by a relocation, which we ignore.
     die "fatal: unexpected APACK-compressed MZ trailer code bytes: $trailer_code\n" if $trailer_code ne "071f8ed033e4ea00000000";
