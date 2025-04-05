@@ -14,7 +14,7 @@ have Linux running.
 Byte sizes:
 
 * 222670 bytes, original Windows 98 SE io.sys released by Microsoft in [KB311561](https://web.archive.org/web/20070510143604/http://support.microsoft.com/kb/311561) ([backup link](https://www.betaarchive.com/wiki/index.php?title=Microsoft_KB_Archive/311561)): *winboot.98s*
-* 138477 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
+* 138461 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbumc*
 * 128365 bytes, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA: *IO.SYS.win98sekbuml*
 * 72617 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed: *IO.SYS.win98sekbpc*
 * 68270 bytes, without the logo and MSDCM, [w3xstart](https://web.archive.org/web/20240918013509/https://msfn.org/board/topic/97945-windows-311-and-ms-dos-71/#findComment-964141) patch applied, recompressed with LZMA and custom decompressor: *IO.SYS.win98sekbplx*

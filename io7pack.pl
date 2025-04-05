@@ -237,6 +237,14 @@ my $outsize;
     $cnblocks = (length($_) + 0x1ff) >> 9;
     $clastsize = length($_) & 0x1ff;
   }
+  if ($cnreloc) {
+    die "fatal: bad nreloc $cnreloc in compressed output: $cfn\n" if $cnreloc != 1;  # 0 is also valid, see above.
+    die sprintf("fatal: bad crelocpos 0x%x in compressed output: %s\n", $crelocpos, $cfn) if $crelocpos != 0x1c;
+    my($reloc_ofs, $reloc_seg) = unpack("vv", substr($_, $crelocpos, 4));
+    my $reloc_fofs = ($chdrsize << 4) + ($reloc_seg << 4 | $reloc_ofs);
+    die "fatal: reloc not at the last 2 bytes of the image in compresed output: $cfn\n" if $reloc_fofs != length($_) - 2;
+    die "fatal: reloc not part of far jump\n" if length($_) < 5 or substr($_, -5) ne "\xea\0\0\0\0";
+  }
   # +0x70 is msbio base segment; +0xa is stack space (0xa0 bytes); -0x60 is
   # to compensate for the offsets (+0x700 for temporary stack, +0x800 for
   # relocated msload).
@@ -257,7 +265,7 @@ my $outsize;
   }
   my $msbio_passed_para_count = ($insize - length($msload)) >> 4; # Same as load_para_count in msbio. Passed in DI from msload to msbio.
   if ($used_compressor =~ m@^upx@) {
-    die "fatal: bad nreloc in compressed output: $cfn\n" if $cnreloc != 0;
+    die "fatal: bad nreloc in compressed output: $cfn\n" if $cnreloc != 0;  #  Our patches below only work with $cnreloc == 0 (`upx --no-reloc').
     my($reg_init_code, $do_set_es_to_psp);
     if (substr($_, $chdrsize << 4, 5) eq "\x16\x07\xbb\x00\x80") {  # push ss ++ pop es ++ mov bx, 0x8000. Only true for the output of `upx --lzma'.
       $do_set_es_to_psp = 0;
@@ -303,7 +311,6 @@ my $outsize;
     $outsize = length($_) + length($before_decompressor_code);
     $_ .= $before_decompressor_code;
   } else {  # apack1p.
-    die "fatal: bad nreloc in compressed output: $cfn\n" if $cnreloc != 1;
     die "fatal: bad crelocpos in compressed output: $cfn\n" if $crelocpos != 0x1c;
     my($reloc0ofs, $reloc0seg) = unpack("vv", substr($_, $crelocpos, 4));
     my $expected_reloc0_fofs = ($chdrsize << 4) + ($reloc0seg << 4) + $reloc0ofs;
