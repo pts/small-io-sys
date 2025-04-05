@@ -222,6 +222,21 @@ my $outsize;
   die "fatal: bad cip in compressed output: $cfn\n" if $cip != 0;
   my $expected_csize = (($clastsize & 0x1ff) or 0x200) + (($cnblocks - 1) << 9);
   die "fatal: bad compressed output size: $cfn\n" if length($_) != $expected_csize;
+  if ($used_compressor =~ m@^upx@) {  # Remove the flags and extra bytes from the end.
+    die "fatal: compressed output too short: $cfn\n" if length($_) < ($chdrsize << 4) + 9;
+    my $i = length($_);
+    my $flags = vec($_, --$i, 8);  # Bitmask of: NORELOC = 1, USEJUMP = 2, SS = 4, SP = 8, MINMEM = 16, MAXMEM = 32.
+    die sprintf("fatal: bad UPX flag byte 0x%02x in compressed output: %s\n") if $flags != 0x3d and $flags != 0x3f;
+    $i -= 2 if $flags & 32;  # MAXMEM. The last word of $_ now.
+    $i -= 2 if $flags & 16;  # MINMEM.
+    $i -= 2 if $flags & 8;  # SP.
+    $i -= 2 if $flags & 4;  # SS.
+    $outsize_estimate -= length($_) - $i;
+    substr($_, $i) = "";
+    $expected_csize = $i;
+    $cnblocks = (length($_) + 0x1ff) >> 9;
+    $clastsize = length($_) & 0x1ff;
+  }
   # +0x70 is msbio base segment; +0xa is stack space (0xa0 bytes); -0x60 is
   # to compensate for the offsets (+0x700 for temporary stack, +0x800 for
   # relocated msload).
