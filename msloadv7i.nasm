@@ -27,6 +27,16 @@
 ; For documentation, see https://retrocomputing.stackexchange.com/a/15598 and
 ; https://pushbx.org/ecm/doc/ldosboot.htm#protocol-sector-msdos7
 ;
+; Data passing via MS-DOS v7 load protocol from msload (first 0x800 bytes of io.sys) to msbio:
+;
+; * AX == 0. `mov ax, [0x7fa]' of the original (0x800-byte) msload, the value is 0.
+; * BX == 0. `mov ax, [0x7fa+2]' of the original (0x800-byte) msload, the value is 0.
+; * DI == msbio_passed_para_count == load_para_count. Number of paragraphs before MSDCM (total in msload and msbio). Original Windows 98 SE msbio passed a smaller value, the exact value being very strange.
+; * DL == BIOS drive number used for booting.
+; * DH == media descriptor.
+; * SS:SP points to a top of a valid stack.
+; * SS:BP points to a memory region of <=0x5a bytes containing the beginning of the boot sector.
+;
 ; Memory layout:
 ;
 ; * 0...0x400: Interrupt table.
