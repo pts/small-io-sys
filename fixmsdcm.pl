@@ -43,13 +43,16 @@ sub write_file($$) {
 }
 
 $_ = read_file($infn);  # TODO(pts): Read less (0x18 bytes) if $infn equ $outfn.
-die("fatal: not an io.sys file: $infn\n") if (substr($_, 0, 2) ne "MZ" and substr($_, 0, 2) ne "MF") or substr($_, 0x200, 2) ne "BJ";
+die("fatal: not an io.sys file: $infn\n") if (substr($_, 0, 2) ne "MZ" and substr($_, 0, 2) ne "MG") or substr($_, 0x200, 2) ne "BJ";
 my($signature, $msdcm_lastsize, $msdcm_nblocks, $msdcm_nreloc, $hdrsize, $msdcm_minalloc, $msdcm_maxalloc, $msdcm_ss, $msdcm_sp, $checksum, $msdcm_ip, $msdcm_cs) = unpack("a2v11", substr($_, 0, 0x18));
 die("fatal: bad MZ nreloc: $infn\n") if $msdcm_nreloc;   # Also checked above.
+die("fatal: bad MZ lastsize, must be 0: $infn\n") if $msdcm_lastsize and !$msdcm_nblocks;
 # It's OK to have any $checksum value.
 my $has_changed = 0;
-my $image_size = (($msdcm_lastsize & 0x1ff) or 0x200) + (($msdcm_nblocks - 1) << 9);
+my $imagehdr_size = (($msdcm_lastsize & 0x1ff) or 0x200) + (($msdcm_nblocks - 1) << 9);
 sub fix_minmaxalloc($$$$$) {
+  # minalloc and maxalloc values are paragraph counts beyond the .exe image
+  # (i.e. this many paragraphs: (nblocks << 5) - hdrsize).
   my($minmaxalloc, $orig_nblocks, $orig_hdrsize, $nblocks, $hdrsize) = @_;
   return $minmaxalloc if $minmaxalloc == 0 or $minmaxalloc == 0xffff;
   my $minmaxallocx = ($orig_nblocks << 5) + $minmaxalloc - $orig_hdrsize;
@@ -60,26 +63,46 @@ if ($signature eq "MZ" and $msdcm_nblocks) {  # Already fixed, just check.
   die("fatal: bad sp in MZ header: $infn\n") if !$msdcm_sp;
   die("fatal: bad MSCDM MZ hdrsize: $infn\n") if ((length($_) + 0xf) >> 4) < $hdrsize;
   die("fatal: missing MSCDM: $infn\n") if ((length($_) + 0xf) >> 4) == $hdrsize;
-  die("fatal: bad image size: $infn\n") if $image_size != length($_);
-} elsif (!$msdcm_nblocks) {  # Already fixed, just check.
+  die("fatal: image too short: $infn\n") if $imagehdr_size > length($_);
+  die("fatal: unexpected overlay: $infn\n") if $imagehdr_size and $imagehdr_size < length($_);
+} elsif ($signature eq "MZ" and !$msdcm_nblocks) {  # Already fixed, just check.
   die("fatal: bad MZ signature: $infn\n") if $signature ne "MZ";
-  die("fatal: bad MZ hdrsize: $infn\n") if ((length($_) + 0xf) >> 4) != $hdrsize;
   die("fatal: bad missing MSDCM in MZ header: $infn\n") if $msdcm_lastsize or $msdcm_nblocks or $msdcm_minalloc or $msdcm_maxalloc or $msdcm_ss or $msdcm_sp or $msdcm_ip or $msdcm_cs;
-} else {
-  die("fatal: bad MF signature: $infn\n") if $signature ne "MF";
-  die("fatal: MF hdrsize too small: $infn\n") if $hdrsize < 1;
-  die("fatal: bad MF hdrsize: $infn\n") if ((length($_) + 0xf) >> 4) < $hdrsize;
-  my $orig_image_size = (($msdcm_lastsize & 0x1ff) or 0x200) + (($msdcm_nblocks - 1) << 9);
-  my $orig_hdrsize = 0x20 >> 4;  # As created by `apack1p -3 -h'.
+  die("fatal: image too short: $infn\n") if $imagehdr_size > length($_);
+  die("fatal: kernel image shorter than hdrsize: $infn\n")  if ((length($_) + 0xf) >> 4) < $hdrsize;
+  die("fatal: unexpected data after kernel image: $infn\n") if ((length($_) + 0xf) >> 4) > $hdrsize;
+} elsif ($signature eq "MG") {
+  # The MG header: my($mg_signature, $mg_orig_lastsize, $mg_orig_nblocks, $mg_nreloc, $mg_hdrsize, $mg_orig_minalloc, $mg_orig_maxalloc, $mg_ss, $mg_sp, $mg_orig_hdrsize, $mg_ip, $mg_cs) = unpack("a2v11", substr($_, 0, 0x18));
+  # MSDCM must be present if the MG header is used.
+  # Values in the MG header are a combination of original MZ headers values ($mg_orig_...) and new MZ header values.
+  # Typical size change: $mg_hdrsize < $mg_orig_hdrsize, because the embedded compressed logo has been removed.
+  # The code below converts the MG header to a regular DOS .exe MZ header by making the following changes:
+  # * It keeps $mg_nreloc (always 0), $mg_ss, $mg_sp, $mg_ip, $mg_cs.
+  # * It keeps $mg_hdrsize, which still contains the paragraph offset of MSDCM within the file, or the paragraph size of the file if MSDCM is missing.
+  # * It sets $mg_orig_lastsize ($lastsize) and $mg_orig_nblocks  ($nblocks)  to accommodate the change of hdrsize: increase by $mg_hdrsize, decrease by $mg_orig_hdrsize.
+  # * It sets $mg_orig_minalloc ($minalloc) and $mg_orig_maxalloc ($maxalloc) to accommodate the change of hdrsize: increase by $mg_hdrsize, decrease by $mg_orig_hdrsize. Please note that the total memory available for MSDCM will be the same.
+  # * It sets $mg_signature ($signature) to "MZ".
+  # * It sets $mg_orig_hdrsize ($checksum) to 0.
+  die("fatal: unexpected MG signature without MSDCM: $infn\n") if !$msdcm_nblocks;
+  die("fatal: MG hdrsize too small: $infn\n") if $hdrsize < 1;
+  die("fatal: kernel image shorter than hdrsize: $infn\n") if ((length($_) + 0xf) >> 4) < $hdrsize;
+  die("fatal: MSDCM is empty: $infn\n") if ((length($_) + 0xf) >> 4) == $hdrsize;
+  my $orig_lastsize = $msdcm_lastsize;
   my $orig_nblocks = $msdcm_nblocks;
-  $image_size += ($hdrsize - $orig_hdrsize) << 4;
+  my $orig_imagehdr_size = (($msdcm_lastsize & 0x1ff) or 0x200) + (($msdcm_nblocks - 1) << 9);
+  my $orig_hdrsize = $checksum;
+  my $imagehdr_size_delta_para = $hdrsize - $orig_hdrsize;  # Typically 0 or negative.
+  $imagehdr_size += $imagehdr_size_delta_para << 4;
+  die("fatal: bad new file size: $infn\n") if $imagehdr_size != length($_);
   $has_changed = 1;
   $signature = "MZ";
-  $msdcm_nblocks = ($image_size + 0x1ff) >> 9;
-  $msdcm_lastsize = $image_size & 0x1ff;
+  $checksum = 0;
+  $msdcm_nblocks = ($imagehdr_size + 0x1ff) >> 9;
+  $msdcm_lastsize = $imagehdr_size & 0x1ff;
   $msdcm_minalloc = fix_minmaxalloc($msdcm_minalloc, $orig_nblocks, $orig_hdrsize, $msdcm_nblocks, $hdrsize);
   $msdcm_maxalloc = fix_minmaxalloc($msdcm_maxalloc, $orig_nblocks, $orig_hdrsize, $msdcm_nblocks, $hdrsize);
-  die("fatal: bad new image size: $infn\n") if $image_size != length($_);
+} else {  # Shouldn't happen, checked above.
+  die("fatal: bad signature: $infn\n");
 }
 my $msloadsize = (substr($_, 0x340 - 4, 4) eq "ML7I") ? 0x340 : (substr($_, 0x400 - 4, 4) eq "ML7I") ? 0x400 : (substr($_, 0x800 - 2, 2) eq "MS") ? 0x800 : 0;
 die "fatal: missing msload in io.sys file: $infn\n" if !$msloadsize;
@@ -97,8 +120,8 @@ if ($msloadsize != 0x800 or substr($_, 0x800 - 10, 4) eq "ML7I") {  # Check $rds
       # This corresponds to `var.fat_cache_segment: dw RELOC_BASE_SEGMENT+0xc0-0x10+(EXTRA_SKIP_SECTOR_COUNT<<5)' in msloadv7i.nasm.
       $var_fat_cache_segment != $rbseg + 0xc0 - 0x10 + ((length($msload) == 0x340) << 6);
 }
-if ($image_size) {  # Do some additional checks if MSDCM is present.
-  my $initialized_mem_size = ($image_size - ($hdrsize << 4));
+if ($imagehdr_size) {  # Do some additional checks if MSDCM is present.
+  my $initialized_mem_size = ($imagehdr_size - ($hdrsize << 4));
   die("fatal: image size is smaller than hdrsize: $infn\n") if $initialized_mem_size < 0;
   my $mem_size = $initialized_mem_size + ($msdcm_minalloc or 0xffff) << 4;
   my $entry_laddr = ($msdcm_cs << 4) + $msdcm_ip;

@@ -106,7 +106,7 @@ msload:
 mz_header:
 
 %ifdef MSDCM
-.signature:	db 'MF'	 ; Signature. Indicates that fixmsdcm.pl has to be run.
+.signature:	db 'MG'	 ; Signature. Indicates that fixmsdcm.pl has to be run to fix .signature, .lastsize, .nblocks, .minalloc, .maxalloc and .checksum.
 .lastsize:	incbin MSDCM_FN, 2, 4  ; .lastsize and .nblocks will be fixed by running fixmsdcm.pl.
 %else
 .signature:	db 'MZ'	 ; Signature. Checked by the boot sector boot code: cmp word [bx], 'MZ'
@@ -116,7 +116,9 @@ mz_header:
 .nreloc:	dw 0  ; No relocations. That's always true, even for MSDCM. msloadv7i.nasm requires it, because its code starts at file offset 0x18.
 .hdrsize:	dw (logo_payload_end-mz_header+0xf)>>4  ;0x2e40  ; dw (end-.signature)>>4  ; Will be copied to load_para_count. Used by msload to determine how many bytes of msbio to load.
 %ifdef MSDCM
-.minalloc:	incbin MSDCM_FN, 0xa, 0x18-0xa  ; .minalloc will be fixed by running fixmsdcm.pl.
+.minalloc:	incbin MSDCM_FN, 0xa, 0x12-0xa  ; .minalloc and .maxalloc will be fixed by running fixmsdcm.pl.
+.checksum:	incbin MSDCM_FN, 8, 2  ; Original .hdrsize value.
+.ip:		incbin MSDCM_FN, 0x14, 0x18-0x14
 %else
 .minalloc:	dw 0  ; Value correct only if there is no MSDCM. It's hard to get this right in NASM, so MSDCM will be will be fixed by fixmsdcm.pl.
 .maxalloc:	dw 0  ; Value correct only if there is no MSDCM.
@@ -126,9 +128,9 @@ mz_header:
 .ip:		dw 0  ; Value correct only if there is no MSDCM.
 .cs:		dw 0  ; Value correct only if there is no MSDCM.
 %endif
+assert_hfofs 0x18
 ;.relocpos:	dw ?
 ;.noverlay:	dw ?
-assert_hfofs 0x18
 %if MSLOAD_PARA_SIZE==0x34
 		incbin 'msloadv7is0.bin', 0x18, (MSLOAD_PARA_SIZE<<4)-0x18
 %elif MSLOAD_PARA_SIZE==0x40
