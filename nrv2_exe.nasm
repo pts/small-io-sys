@@ -142,8 +142,8 @@ setup_code:
 		pop ds
 		pop es
 		push ss  ; Will be popped right below by `retf'. Because of this `push ss', OVERLAP, COPY_DELTA and C_SS must correspond to each other.
-		mov bp, ((decompress.start-exe_image-1)&0xf)+1
-		mov bx, 0x8000-1+((((decompress.start-exe_image-1)&0xf)+1)<<4)  ; !! Use shorter initialization if no LASTMOFF1.
+		mov bp, AFTER_COPY_OFS  ; Offset of the copy of decompress.start. Also needs this initial value 1 of last_m_off == (BP << 4) - BL.
+		mov bx, 0x8000+(AFTER_COPY_OFS<<4)-1  ; By setting BL correctly, this also takes care of last_m_off := 1.  ; !! Use shorter initialization if no LASTMOFF1.
 		push bp  ; Will be popped right below by `retf'.
 		retf
 ; !! For paragraph alignment purposes, make this 5 bytes shorter, move code to decompress_nrv2b_8, skip over first byte `movsb' with `test al, ...'.
@@ -153,16 +153,17 @@ align_before_compressed_data:
 
 compressed_data:  ; With method M_NRV2B_8.
 		incbin UPXEXEFN, CDATASKIP, CSIZE
+.end:
 MIN_STACK_SIZE equ 0x80
 MIN_COPY_DELTA equ (OVERLAP-(compressed_data-exe_image)+0xf)>>4  ; Measured in paragraphs (0x10 bytes).
-MIN_C_SS equ (($-exe_image)>>4)+MIN_COPY_DELTA  ; Measured in paragraphs (0x10 bytes).
+MIN_C_SS equ ((compressed_data.end-exe_image)>>4)+MIN_COPY_DELTA  ; Measured in paragraphs (0x10 bytes).
 MIN_C_SP equ 0x200  ; UPX default. !! Try smaller, calculate it (later) as: MIN_C_SP equ copy_source_end-(decompress-((exe_image-decompress)&0xf))+MIN_STACK_SIZE
 %if MIN_C_SS<=U_SS && MIN_C_SP<=U_SP
   C_SS equ U_SS  ; This makes the decompressor shorter, because `lea ax, [...]' ++ `mov ss, ax' is not needed in jump_to_program.
 %else
   C_SS equ MIN_C_SS
 %endif
-COPY_DELTA equ C_SS-(($-exe_image)>>4)
+COPY_DELTA equ C_SS-((compressed_data.end-exe_image)>>4)
 %if C_SS==U_SS && MIN_C_SP<=U_SP
   C_SP equ U_SP
 %else
@@ -262,6 +263,8 @@ decompress:
   %error ERROR_UNSUPPORTED_METHOD METHOD
   times -1 nop
 %endif
+
+AFTER_COPY_OFS equ ((compressed_data.end-exe_image)&0xf)+(decompress.start-compressed_data.end)
 
 after_decompress:
 
