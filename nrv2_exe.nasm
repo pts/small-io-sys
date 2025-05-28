@@ -29,10 +29,6 @@
   db 1/0
 %endif
 
-%ifndef UPX_COPY_DELTA
-  %define UPX_COPY_DELTA 0
-%endif
-
 ; UPX compression method constants.
 M_NRV2B_LE32    equ 2
 M_NRV2B_8       equ 3
@@ -62,8 +58,6 @@ M_LZMA          equ 14
 %assign UPX_C_SS UPX_C_SS  ; !! Remove.
 %assign U_SS U_SS
 %assign OVERLAP OVERLAP
-;%assign UPX_COPY_DELTA 0  ; !!!UPX_COPY_DELTA  ; !! Remove.
-%assign UPX_COPY_DELTA UPX_COPY_DELTA  ; !! Remove.
 
 ; ---
 
@@ -174,25 +168,15 @@ align_before_compressed_data:
 
 compressed_data:  ; With method M_NRV2B_8.
 		incbin UPXEXEFN, CDATASKIP, CSIZE
+MIN_COPY_DELTA equ (OVERLAP-(compressed_data-exe_image)+0xf)>>4
+MIN_C_SS equ (($-exe_image)>>4)+MIN_COPY_DELTA
 MIN_C_SP equ 0x200
-%if UPX_COPY_DELTA  ; !! Remove, use OVERLAP instead.
-  COPY_DELTA equ UPX_COPY_DELTA
-  C_SS equ (($-exe_image)>>4)+COPY_DELTA
-  %if UPX_C_SS!=C_SS
-    %error ERROR_BAD_C_SS
-    db 1/0
-  %endif
+%if MIN_C_SS<=U_SS && MIN_C_SP<=U_SP
+  C_SS equ U_SS  ; This makes the decompressor shorter, because `lea ax, [...]' ++ `mov ss, ax' is not needed in jump_to_program.
 %else
-  MIN_COPY_DELTA equ (OVERLAP-(compressed_data-exe_image)+0xf)>>4
-  MIN_C_SS equ (($-exe_image)>>4)+MIN_COPY_DELTA
-  %if MIN_C_SS<=U_SS && MIN_C_SP<=U_SP
-    C_SS equ U_SS  ; This makes the decompressor shorter, because `lea ax, [...]' ++ `mov ss, ax' is not needed in jump_to_program.
-    COPY_DELTA equ C_SS-(($-exe_image)>>4)
-  %else
-    C_SS equ MIN_C_SS
-    COPY_DELTA equ MIN_COPY_DELTA
-  %endif
+  C_SS equ MIN_C_SS
 %endif
+COPY_DELTA equ C_SS-(($-exe_image)>>4)
 %if C_SS==U_SS && MIN_C_SP<=U_SP && 0  ; !! Enable this, it makes jump_to_program shorter by omitting `mov sp, U_SP'.
   C_SP equ U_SP
 %else

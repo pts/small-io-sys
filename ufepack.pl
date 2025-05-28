@@ -345,7 +345,7 @@ printf(STDERR "info: filtered: $infn: start_ofs=$img_start size=$img_size filter
 substr($s, $img_start, $img_size) = $img_data;
 write_file($tmpfn, $s);
 my $u_exesize = length($s);
-my($creloc_size, $csize, $cdataskip, $usize, $c_ss, $c_sp, $c_minalloc, $c_maxalloc, $upx_copy_delta);
+my($creloc_size, $csize, $cdataskip, $usize, $c_ss, $c_sp, $c_minalloc, $c_maxalloc);
 {
   my @upx_flags = qw(--best --no-lzma --small --no-reloc --no-filter -f -q -q -q);  # This doesn't support LZMA.
   my @upx_cmd = ($upx_prog, @upx_flags, "--$method_str", @upx_crp_flags, "--", $tmpfn);
@@ -383,11 +383,6 @@ my($creloc_size, $csize, $cdataskip, $usize, $c_ss, $c_sp, $c_minalloc, $c_maxal
   die("fatal: unexpected (bad?) eh_ss\n") if $css != $ss;
   die("fatal: compressed .exe is too large for decompressor\n") if $eh_csize > 0xffff;
   die("fatal: uncompressed .exe is too large for decompressor\n") if $eh_usize > 0xffff;
-  if (1) {  # !! Remove. Also remove $upx_copy_delta.
-    pos($s) = 0x20;  # For the \G below.
-    die("fatal: missing upx_copy_delta\n") if $s !~ m@\G\xb9..\xbe..\x89\xf7\x1e\xa9\xb5\x80\x8c\xc8\x05\x05\x00\x8e\xd8\x05(..)\x8e\xc0\xfd\xf3\xa5\xfc\x2e\x80\x6c\x12\x10\x73\xe7\x92\xaf\xad\x0e@gs;
-    $upx_copy_delta = unpack("v", $1);
-  }
   $csize = $eh_csize; $usize = $eh_usize; $c_ss = $css; $c_sp = $csp; $c_minalloc = $cminalloc; $c_maxalloc = $cmaxalloc;
 }
 my $c_exesize = length($s);
@@ -398,7 +393,6 @@ $csize = $short_eos_ofs if 0;  # !! Add truncation of the NRV2 stream to $short_
   my @nasm_cmd = (
       $nasm_prog, "-O0", "-w+orphan-labels", "-f", "bin", "-DUPXEXEFN='$tmpfn'",
       "-DCPU=$cpu", "-DMETHOD=$method", sprintf("-DFILTER=0x%02x", $filter), "-DFILTER_CHANGE_COUNT=$count", "-DCSIZE=$csize", "-DCDATASKIP=$cdataskip", "-DUSIZE=$usize", "-DLASTMOFF1=$lastmoff1", "-DMAXDIST=$max_distance", "-DOVERLAP=$overlap",
-      "-DUPX_COPY_DELTA=$upx_copy_delta",  # !! Remove.
       "-DCRELOC_SIZE=$creloc_size", "-DC_MINALLOC=$c_minalloc", "-DC_MAXALLOC=$c_maxalloc", "-DU_MINALLOC=$minalloc", "-DU_MAXALLOC=$maxalloc", "-DUPX_C_SS=$c_ss", "-DU_SS=$ss", "-DU_SP=$sp", "-DU_IP=$ip", "-DU_CS=$cs",
       "-o", $outfn, "--", "nrv2_exe.nasm");
   print(STDERR "info: running NASM to generate final .exe: ", join(" ", map { shq($_) } @nasm_cmd), "\n");
