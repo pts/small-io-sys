@@ -334,8 +334,10 @@ die("fatal: missing DOS .exe MZ signature\n") if $s !~ m@^(?:MZ|ZM)@;
 my($lastsize, $nblocks, $nreloc, $hdrsize, $minalloc, $maxalloc, $ss, $sp, $checksum, $ip, $cs, $relocpos, $noverlay) =
     unpack("x2v15", substr($s, 0, 0x20));
 die("fatal: zero DOS .exe nblocks\n") if $nblocks == 0;
+die("fatal: DOS .exe nblocks too large\n") if $nblocks > 0x7ff;  # Turbo C++ 3 BOSS NE stub has $nblocks > 0x7ff. We don't want to compress it.
 my $img_start = ($hdrsize << 4);
 my $img_size = (($lastsize & 0x1ff) or 0x200) + (($nblocks - 1) << 9) - $img_start;
+my $u_base_size = ($nblocks << 5) - $hdrsize;
 my $img_data = substr($s, $img_start, $img_size);
 die("fatal: EOF in DOS .exe image\n") if length($s) < $img_start + $img_size;
 die("fatal: unexpected overlay at end of DOS .exe\n") if length($s) > $img_start + $img_size;
@@ -345,7 +347,7 @@ printf(STDERR "info: filtered: $infn: start_ofs=$img_start size=$img_size filter
 substr($s, $img_start, $img_size) = $img_data;
 write_file($tmpfn, $s);
 my $u_exesize = length($s);
-my($creloc_size, $csize, $cdataskip, $usize, $c_ss, $c_sp, $c_minalloc, $c_maxalloc);
+my($creloc_size, $csize, $cdataskip, $usize);
 {
   my @upx_flags = qw(--best --no-lzma --small --no-reloc --no-filter -f -q -q -q);  # This doesn't support LZMA.
   my @upx_cmd = ($upx_prog, @upx_flags, "--$method_str", @upx_crp_flags, "--", $tmpfn);
@@ -383,7 +385,7 @@ my($creloc_size, $csize, $cdataskip, $usize, $c_ss, $c_sp, $c_minalloc, $c_maxal
   die("fatal: unexpected (bad?) eh_ss\n") if $css != $ss;
   die("fatal: compressed .exe is too large for decompressor\n") if $eh_csize > 0xffff;
   die("fatal: uncompressed .exe is too large for decompressor\n") if $eh_usize > 0xffff;
-  $csize = $eh_csize; $usize = $eh_usize; $c_ss = $css; $c_sp = $csp; $c_minalloc = $cminalloc; $c_maxalloc = $cmaxalloc;
+  $csize = $eh_csize; $usize = $eh_usize;
 }
 my $c_exesize = length($s);
 my($analyzed_usize, $short_eos_ofs, $max_distance, $lastmoff1, $overlap, $ebb) = analyze_nrv2(substr($s, $cdataskip, $csize), $method);
@@ -393,7 +395,7 @@ $csize = $short_eos_ofs if 0;  # !! Add truncation of the NRV2 stream to $short_
   my @nasm_cmd = (
       $nasm_prog, "-O0", "-w+orphan-labels", "-f", "bin", "-DUPXEXEFN='$tmpfn'",
       "-DCPU=$cpu", "-DMETHOD=$method", sprintf("-DFILTER=0x%02x", $filter), "-DFILTER_CHANGE_COUNT=$count", "-DCSIZE=$csize", "-DCDATASKIP=$cdataskip", "-DUSIZE=$usize", "-DLASTMOFF1=$lastmoff1", "-DMAXDIST=$max_distance", "-DOVERLAP=$overlap",
-      "-DCRELOC_SIZE=$creloc_size", "-DC_MINALLOC=$c_minalloc", "-DC_MAXALLOC=$c_maxalloc", "-DU_MINALLOC=$minalloc", "-DU_MAXALLOC=$maxalloc", "-DUPX_C_SS=$c_ss", "-DU_SS=$ss", "-DU_SP=$sp", "-DU_IP=$ip", "-DU_CS=$cs",
+      "-DCRELOC_SIZE=$creloc_size", "-DU_MINALLOC=$minalloc", "-DU_MAXALLOC=$maxalloc", "-DU_SS=$ss", "-DU_SP=$sp", "-DU_IP=$ip", "-DU_CS=$cs", "-DU_BASE_SIZE=$u_base_size",
       "-o", $outfn, "--", "nrv2_exe.nasm");
   print(STDERR "info: running NASM to generate final .exe: ", join(" ", map { shq($_) } @nasm_cmd), "\n");
   my $status = system(@nasm_cmd);

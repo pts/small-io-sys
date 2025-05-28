@@ -5,7 +5,9 @@
 ; Compile with: nasm -O0 -w+orphan-labels -f bin -DUPXEXEFN="'myupxed.exe'" -D...=... -o myout.exe nrv2_exe.nasm
 ; Minimum NASM version needed: 0.98.39
 ;
-; !! The output matches the output of UPX 3.94, i.e. myout.exe and myupxed.exe are the same.
+; The output matches the output of UPX 3.94 (except for
+; exe_header.minalloc and exe_header.maxalloc), i.e. myout.exe and
+; myupxed.exe are the same.
 ;
 
 %ifndef CPU  ; Specified on the command line. Typically 8086, 186 or 386.
@@ -50,14 +52,12 @@ M_LZMA          equ 14
 %assign CDATASKIP CDATASKIP
 %assign USIZE USIZE
 %assign CRELOC_SIZE CRELOC_SIZE
-%assign C_MINALLOC C_MINALLOC
-%assign C_MAXALLOC C_MAXALLOC
-%assign U_MINALLOC U_MINALLOC  ; !! Remove.
-%assign U_MAXALLOC U_MAXALLOC  ; !! Remove.
-%assign U_SP U_SP  ; !! Remove.
-%assign UPX_C_SS UPX_C_SS  ; !! Remove.
+%assign U_MINALLOC U_MINALLOC
+%assign U_MAXALLOC U_MAXALLOC
+%assign U_SP U_SP
 %assign U_SS U_SS
 %assign OVERLAP OVERLAP
+%assign U_BASE_SIZE U_BASE_SIZE
 
 ; ---
 
@@ -93,8 +93,8 @@ exe_header:  ; DOS .exe header: http://justsolve.archiveteam.org/wiki/MS-DOS_EXE
 .nblocks:	dw (exe_image_size_hdr+0x1ff)>>9  ; Number of 0x200 pages in load module.
 .nreloc:	dw 0  ; Number of relocation items; no relocations.
 .hdrsize:	dw (exe_image-exe_header)>>4  ; Size of header in paragraphs.
-.minalloc:	dw C_MINALLOC  ; Minimum number of paragraphs required above load module.  !! What should be the new value here?
-.maxalloc:	dw C_MAXALLOC  ; Maximum number of paragraphs required above load module.  !! What should be the new value here?
+.minalloc:	dw C3_MINALLOC  ; Minimum number of paragraphs required above load module.
+.maxalloc:	dw C3_MAXALLOC  ; Maximum number of paragraphs required above load module.
 .ss:		dw C_SS  ; Offset of stack segment in load module.
 .sp:		dw C_SP  ; Initial value of SP.
 .checksum:	dw 0  ; Checksum.
@@ -168,9 +168,10 @@ align_before_compressed_data:
 
 compressed_data:  ; With method M_NRV2B_8.
 		incbin UPXEXEFN, CDATASKIP, CSIZE
-MIN_COPY_DELTA equ (OVERLAP-(compressed_data-exe_image)+0xf)>>4
-MIN_C_SS equ (($-exe_image)>>4)+MIN_COPY_DELTA
-MIN_C_SP equ 0x200
+MIN_STACK_SIZE equ 0x80
+MIN_COPY_DELTA equ (OVERLAP-(compressed_data-exe_image)+0xf)>>4  ; Measured in paragraphs (0x10 bytes).
+MIN_C_SS equ (($-exe_image)>>4)+MIN_COPY_DELTA  ; Measured in paragraphs (0x10 bytes).
+MIN_C_SP equ 0x200  ; UPX default. !! Try smaller, calculate it (later) as: MIN_C_SP equ copy_source_end-(decompress-((exe_image-decompress)&0xf))+MIN_STACK_SIZE
 %if MIN_C_SS<=U_SS && MIN_C_SP<=U_SP
   C_SS equ U_SS  ; This makes the decompressor shorter, because `lea ax, [...]' ++ `mov ss, ax' is not needed in jump_to_program.
 %else
@@ -366,6 +367,12 @@ jump_to_program:
 
 copy_source_end:
 
+MIN_MEM_FOR_COMPRESSION equ (C_SS<<4)+C_SP
+%if copy_source_end-exe_image+MIN_STACK_SIZE>MIN_MEM_FOR_COMPRESSION
+  %error ERROR_MEM_USAGE_LARGER_THAN_STACK_END
+  db 1/0
+%endif
+
 decompression_info:  ; Used by `upx -d'. !! Truncate the file, this is not needed for execution.
 %assign DFLAG 0
 %if CRELOC_SIZE==0
@@ -379,17 +386,60 @@ decompression_info:  ; Used by `upx -d'. !! Truncate the file, this is not neede
   %assign DFLAG DFLAG+8  ; SP.
 		dw U_SP
 %endif
-%if C_MINALLOC!=U_MINALLOC
+%if U_MINALLOC!=0 && U_MINALLOC!=0xffff  ; The precise condition is `C3_MINALLOC!=U_MINALLOC', but that has a circular dependency between C3_MINALLOC and exe_image_size_hdr.
   %assign DFLAG DFLAG+16  ; MINMEM.
 		dw U_MINALLOC
 %endif
-%if C_MAXALLOC!=U_MAXALLOC
+%if U_MAXALLOC!=0 && U_MAXALLOC!=0xffff  ; The precise condition is `C3_MAXALLOC!=U_MAXALLOC', but that has a circular dependency between C3_MAXALLOC and exe_image_size_hdr.
   %assign DFLAG DFLAG+32  ; MAXMEM.
 		dw U_MAXALLOC
 %endif
 		db DFLAG  ; Decompression flag byte. enum { NORELOC = 1, USEJUMP = 2, SS = 4, SP = 8, MINMEM = 16, MAXMEM = 32 };
 
-exe_image_size_nohdr equ $-exe_image
+;exe_image_size_nohdr equ $-exe_image  ; Unused.
 exe_image_size_hdr equ $-exe_header
+
+C_BASE_SIZE equ ((exe_image_size_hdr+0x1ff)>>9<<(9-4))-((exe_image-exe_header)>>4)
+MIN_C_MINALLOC equ ((MIN_MEM_FOR_COMPRESSION+0xf)>>4)-C_BASE_SIZE  ; Measured in paragraphs (0x10 bytes).
+%if U_MINALLOC==0 || U_MINALLOC==0xffff
+  C3_MINALLOC equ U_MINALLOC
+%else
+  %if C_BASE_SIZE+MIN_C_MINALLOC>U_BASE_SIZE+U_MINALLOC
+    C2_MINALLOC equ MIN_C_MINALLOC
+  %else
+    C2_MINALLOC equ U_MINALLOC+U_BASE_SIZE-C_BASE_SIZE
+    ; !! Report UPX bug: the C_MINALLOC value calculated by UPX 3.94 is too small. Our value is correct (verified).
+  %endif
+  %if C2_MINALLOC<1
+    C3_MINALLOC equ 1
+  %elif C2_MINALLOC>0xffff
+    %error ERROR_COMPRESSED_EXE_NEEDS_TOO_MUCH_MEMORY
+    db 1/0
+    C3_MINALLOC equ 0xffff
+  %else
+    C3_MINALLOC equ C2_MINALLOC
+  %endif
+%endif
+%if U_MAXALLOC==0 || U_MAXALLOC==0xffff
+  C3_MAXALLOC equ U_MAXALLOC
+%else
+  %if C_BASE_SIZE+MIN_C_MINALLOC>U_BASE_SIZE+U_MAXALLOC
+    C2_MAXALLOC equ MIN_C_MINALLOC
+  %else
+    C2_MAXALLOC equ U_MAXALLOC+U_BASE_SIZE-C_BASE_SIZE
+    ; !! Report UPX bug: the C_MAXALLOC value calculated by UPX 3.94 is too small. Our value is correct (verified).
+  %endif
+  %if C2_MAXALLOC<1
+    C3_MAXALLOC equ 1
+  %elif C2_MAXALLOC>0xffff
+    C3_MAXALLOC equ 0xffff
+  %else
+    C3_MAXALLOC equ C2_MAXALLOC
+  %endif
+  %if C3_MAXALLOC<C3_MINALLOC && C3_MINALLOC!=0 && C3_MINALLOC!=0xffff  ; Should not happen.
+    %error ERROR_COMPRESSED_EXE_MAXALLOC_SMALLER_THAN_MINALLOC
+    db 1/0
+  %endif
+%endif
 
 ; __END__
