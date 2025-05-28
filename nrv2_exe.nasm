@@ -150,11 +150,7 @@ setup_code:
 		pop ds
 		pop es
 		push ss  ; Will be popped right below by `retf'. Because of this `push ss', OVERLAP, COPY_DELTA and C_SS must correspond to each other.
-		mov BLOCKREG, 1<<(BLOCKBITC-1)  ; 0x80 or 0x8000.
-%if LASTMOFF1
-		mov bp, -1  ; last_m_off := 1 (-BP).
-%endif
-%if CPU==8086
+%if CPU==8086  ; !! This is 2 bytes longer than the %else branch. Optimize away 2 bytes, for alignment: move the lodsw of the scasw.
 		mov ax, ((decompress.start-exe_image)&0xf)
 		push ax  ; Will be popped right below by `retf'.
 %else
@@ -188,8 +184,13 @@ COPY_DELTA equ C_SS-((compressed_data.end-exe_image)>>4)
 decompress:
 %if METHOD==M_NRV2B_8 || METHOD==M_NRV2B_LE16
   ; This implementation doesn't work if CSIZE>0xffff or USIZE>0xffff.
+  .start:  ; TODO(pts): For the large decompressor (USIZE>0xffff), make sure that this doesn't start at paragraph boundary (i.e. AFTER_COPY_OFS!=0).
+		mov BLOCKREG, 1<<(BLOCKBITC-1)  ; 0x80 or 0x8000.
+  %if LASTMOFF1
+		mov bp, -1  ; last_m_off := 1 (-BP).
+  %endif
+		db 0xa8  ; `test al, ...', effectively skips over the next `movsb', same but shorter than `jmp strict short .next_token'.
   .literal:	movsb  ; Process an LZSS literal: copy a byte from the input byte stream to the output.
-  .start:
   .next_token:	call .get_bit  ; Read token type: CF == 0 means match, CF == 1 means literal.
 		jc short .literal
 		; Start reading m_off to CX. CX is 0 now, see `xor cx, cx' above.
