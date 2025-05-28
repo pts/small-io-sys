@@ -287,14 +287,14 @@ if ($selfdir !~ m@^/@) {  # This is Unix-only, it should be ported to Windows.
   substr($selfdir, 0, 0) = "./" if $selfdir =~ m@^-@;
 }
 
-# --- Configuration and command-line parsing. !! Let the user change it on the command line.
+# --- Configuration and command-line parsing.
 
 my $infn;
 my $outfn;
 my $filter = 0;
-my $upx_prog = "$selfdir/tools/upx-3.94.upx";
+my $upx_prog = "$selfdir/tools/upx-3.94.upx";  # !! Use a patched UPX to make it find longer matches.
 my $nasm_prog = "$selfdir/tools/nasm-0.98.39.upx";
-my $method_str = "nrv2b";
+my $method_str = "nrv2b";  # !! Let the user specify multiple methods and filters, run them all.
 my $cpu = 8086;  # Most compatible.
 my @upx_crp_flags;
 { my $i;
@@ -390,7 +390,7 @@ my($creloc_size, $csize, $cdataskip, $usize);
 my $c_exesize = length($s);
 my($analyzed_usize, $short_eos_ofs, $max_distance, $lastmoff1, $overlap, $ebb) = analyze_nrv2(substr($s, $cdataskip, $csize), $method);
 die("fatal: bad analyzed NRV2 usize\n") if $analyzed_usize != $usize;
-$csize = $short_eos_ofs if 0;  # !! Add truncation of the NRV2 stream to $short_eos_ofs to save a few more bytes.
+$csize = $short_eos_ofs;  # Truncate the NRV2 stream to $short_eos_ofs to save up to 5 bytes at the end.
 {
   my @nasm_cmd = (
       $nasm_prog, "-O0", "-w+orphan-labels", "-f", "bin", "-DUPXEXEFN='$tmpfn'",
