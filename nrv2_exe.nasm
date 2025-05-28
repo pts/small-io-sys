@@ -141,16 +141,16 @@ setup_code:
 		xchg ax, dx
 		scasw  ; SI += 2. SI := 0. With side effect.
 		lodsw  ; DI += 2. DI := 0. With side effect.
-		push cs  ; Save orig_load_base_CS. Will be popped by `pop bp' in restore_bp_cs.
 %if CRELOC_SIZE
 		push cs  ; Save orig_load_base_CS. Will be popped by `pop bx' in apply_relocations. This is an extra `push cs' as compared to an .exe file without reloactions. !! Reorganize.
 %endif
+		push cs  ; Save orig_load_base_CS. Will be popped by `pop bp' in restore_bp_cs.
 		push cs  ; Will be popped right below by `pop es'.
 		push es  ; Will be popped right below by `pop ds'.
 		pop ds
 		pop es
 		push ss  ; Will be popped right below by `retf'. Because of this `push ss', OVERLAP, COPY_DELTA and C_SS must correspond to each other.
-%if CPU==8086  ; !! This is 2 bytes longer than the %else branch. Optimize away 2 bytes, for alignment: move the lodsw of the scasw.
+%if CPU==8086  ; !! This is 2 bytes longer than the %else branch. Optimize away 1 byte (and no xtra `push cs' for CRELOC_SIZE), for alignment: move the lodsw of the scasw.
 		mov ax, ((decompress.start-exe_image)&0xf)
 		push ax  ; Will be popped right below by `retf'.
 %else
@@ -160,7 +160,7 @@ setup_code:
 ; !! For paragraph alignment purposes, make this 5 bytes shorter, move code to decompress_nrv2b_8, skip over first byte `movsb' with `test al, ...'.
 
 align_before_compressed_data:
-		times (exe_image-$)&0xf db 0  ; !! Get rid of this alignment by making the (long) copy above smarter.
+		times (exe_image-$)&0xf hlt  ; !! Get rid of this alignment by making the (long) copy above smarter.
 
 compressed_data:  ; With method M_NRV2B_8.
 		incbin UPXEXEFN, CDATASKIP, CSIZE
@@ -263,18 +263,56 @@ decompress:
 
 after_decompress:
 
-unfilter:
-%if FILTER && FILTER_CHANGE_COUNT && 0  ; !! Remove `^&& 0'. !! Untested.
+restore_bp_cs:
+		pop bp  ; Restore BP := orig_load_base_CS, set up by setup_code. This is the relocation delta that will be added to each segment value.
+
+apply_relocations:
+%if CRELOC_SIZE
+		push es  ; Will be popped right below by `pop ds'.
+		pop ds
+		lea si, [word di-CRELOC_SIZE]  ; Compressed relocation info at the end of udata.
+		lodsw
+		pop bx  ; Restore BX := orig_load_base_CS. This will be used as a segment value and increased in the loop below so that BX:DI points to the next word to which the relocation delta should be added.
+		xchg ax, cx  ; CX := 0x35. First word loaded from compressed_relocation_info.
+		lodsw
+		xchg ax, dx  ; DX := 0x19f. Seems to be the same as U_CS. Second word loaded from compressed_relocation_info.
+		lodsw
+		xchg ax, di  ; DI := 0x8. Third word loaded from compressed_relocation_info.
+		lodsw  ; AX (paragraph_offset) := 0xa. Fourth word loaded from compressed_relocation_info.
+		add bx, ax  ; BX := orig_load_base_CS + paragraph_offset.
+		mov es, bx  ; ES := orig_load_base_CS + paragraph_offset.
+		xor ax, ax
+.next0:		add di, ax
+		add [es:di], bp  ; Apply single relocation: add relocation delta (BP == orig_load_base_CS) to a segment value.
+.load:		lodsb  ; AH == 0; loads AL := skip_code.
+		dec ax
+		jz short .next_block  ; skip_code==1 means: DI += 0xfe, and load next block if not EOF.
+		inc ax
+		jnz short .next0  ; skip_code>=2 means: DI += skip_code.
+		inc di  ; Otherwise, skip_code==0. Process it by scanning udata (.exe image).
+.scan:		inc di
+		cmp byte [es:di], 0x9a  ; 0x9a is the opcode of the far call (`call SEGMENT:OFFSET') instruction.
+		jnz short .scan
+		cmp [es:di+3], dx  ; DX == 0x19f (== U_CS). Compare the SEGMENT in the far call to limit (in DX).
+		ja short .scan  ; If SEGMENT value is larger than DX (== U_CS) (why not too low??), then don't apply the relocation.
+		mov al, 3  ; Skip over the far call opcode and the offset. Relocation will be applied to the Segment.
+		jmp short .next0
+.next_block:	add di, 0xfe
+		loop .load
+%endif
+
+unfilter:  ; !! Implement relocation compression in the wrapper so that we can apply unfilter before apply_relocations, for better compression ratio (?).
+%if FILTER && FILTER_CHANGE_COUNT
   %if FILTER<1 || FILTER>6
     %error ERROR_UNSUPPORTED_FILTER FILTER
     db 1/0
   %endif
-		; This code must preserve ES, because apply_relocations needs it.
+		; !! Not now, but maybe later: This code must preserve ES:DI (pointing to the end of the just-decompressed uncompressed data), because apply_relocations needs it.
+		; !!! Works with filter==1,2,3,5,6, crashes with filter==4. Why? Probably because relocations must be applied after the unfilter.
 		xor si, si
-		pop ds  ; Restore DS := orig_load_base_CS.
-		push ds  ; Push orig_load_base_CS back, subsequent code will need it. !! Maybe move it to setup_code, if there is more room there.
+		mov ds, bp  ; DS := orig_load_base_CS.
 		mov cx, FILTER_CHANGE_COUNT&0xffff
-  %if FILTER_CHANGE_COUNT>0xffff
+  %if FILTER_CHANGE_COUNT>0x10000  ; It doesn't happen.
 		mov bp, FILTER_CHANGE_COUNT>>16
   %endif
   .next:	lodsb
@@ -303,44 +341,6 @@ unfilter:
 		jnz short .next
   %endif
 %endif  ; %if FILTER && FILTER_CHANGE_COUNT
-
-restore_bp_cs:
-		pop bp  ; Restore BP := orig_load_base_CS, set up by setup_code. This is the relocation delta that will be added to each segment value.
-
-apply_relocations:
-%if CRELOC_SIZE
-		push es  ; Will be popped right below by `pop ds'.
-		pop ds
-		lea si, [word di-CRELOC_SIZE]  ; Compressed relocation info at the end of udata.
-		lodsw
-		pop bx  ; Restore BX := orig_load_base_CS. This will be used as a segment value and increased in the loop below so that BX:DI points to the next word to which the relocation delta should be added.
-		xchg ax, cx  ; CX := 0x35. First word loaded from compressed_relocation_info.
-		lodsw
-		xchg ax, dx  ; DX := 0x19f. Seems to be the same as U_CS. Second word loaded from compressed_relocation_info.
-		lodsw
-		xchg ax, di  ; DI := 0x8. Third word loaded from compressed_relocation_info.
-		lodsw  ; AX (paragraph_offset) := 0xa. Fourth word loaded from compressed_relocation_info.
-		add bx, ax  ; base_segment += paragraph_offset.
-		mov es, bx
-		xor ax, ax
-.next0:		add di, ax
-		add [es:di], bp  ; Apply single relocation: add relocation delta (BP == orig_load_base_CS) to a segment value.
-.load:		lodsb  ; AH == 0; loads AL := skip_code.
-		dec ax
-		jz short .next_block  ; skip_code==1 means: DI += 0xfe, and load next block if not EOF.
-		inc ax
-		jnz short .next0  ; skip_code>=2 means: DI += skip_code.
-		inc di  ; Otherwise, skip_code==0. Process it by scanning udata (.exe image).
-.scan:		inc di
-		cmp byte [es:di], 0x9a  ; 0x9a is the opcode of the far call (`call SEGMENT:OFFSET') instruction.
-		jnz short .scan
-		cmp [es:di+3], dx  ; DX == 0x19f (== U_CS). Compare the SEGMENT in the far call to limit (in DX).
-		ja short .scan  ; If SEGMENT value is larger than DX (== U_CS) (why not too low??), then don't apply the relocation.
-		mov al, 3  ; Skip over the far call opcode and the offset. Relocation will be applied to the Segment.
-		jmp short .next0
-.next_block:	add di, 0xfe
-		loop .load
-%endif
 
 jump_to_program:
 		pop es  ; Restore ES := PSP_segment.
