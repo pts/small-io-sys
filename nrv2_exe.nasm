@@ -163,7 +163,7 @@ MIN_C_SP equ 0x200  ; UPX default. !! Try smaller, calculate it (later) as: MIN_
   C_SS equ MIN_C_SS
 %endif
 COPY_DELTA equ C_SS-(($-exe_image)>>4)
-%if C_SS==U_SS && MIN_C_SP<=U_SP && 0  ; !! Enable this, it makes jump_to_program shorter by omitting `mov sp, U_SP'.
+%if C_SS==U_SS && MIN_C_SP<=U_SP
   C_SP equ U_SP
 %else
   C_SP equ MIN_C_SP
