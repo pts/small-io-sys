@@ -56,6 +56,7 @@ M_LZMA          equ 14
 %assign CDATASKIP CDATASKIP
 %assign USIZE USIZE
 %assign CRELOC_SIZE CRELOC_SIZE
+%assign CRELOC_HAS9A CRELOC_HAS9A
 %assign U_MINALLOC U_MINALLOC
 %assign U_MAXALLOC U_MAXALLOC
 %assign U_SP U_SP
@@ -289,14 +290,16 @@ apply_relocations:
 		jz short .next_block  ; skip_code==1 means: DI += 0xfe, and load next block if not EOF.
 		inc ax
 		jnz short .next0  ; skip_code>=2 means: DI += skip_code.
+%if CRELOC_HAS9A
 		inc di  ; Otherwise, skip_code==0. Process it by scanning udata (.exe image).
 .scan:		inc di
 		cmp byte [es:di], 0x9a  ; 0x9a is the opcode of the far call (`call SEGMENT:OFFSET') instruction.
-		jnz short .scan
+		jne short .scan
 		cmp [es:di+3], dx  ; DX == 0x19f (== U_CS). Compare the SEGMENT in the far call to limit (in DX).
 		ja short .scan  ; If SEGMENT value is larger than DX (== U_CS) (why not too low??), then don't apply the relocation.
 		mov al, 3  ; Skip over the far call opcode and the offset. Relocation will be applied to the Segment.
 		jmp short .next0
+%endif
 .next_block:	add di, 0xfe
 		loop .load
 %endif
@@ -308,7 +311,7 @@ unfilter:  ; !! Implement relocation compression in the wrapper so that we can a
     db 1/0
   %endif
 		; !! Not now, but maybe later: This code must preserve ES:DI (pointing to the end of the just-decompressed uncompressed data), because apply_relocations needs it.
-		; !!! Works with filter==1,2,3,5,6, crashes with filter==4. Why? Probably because relocations must be applied after the unfilter.
+		; !!! Works with filter==1,2,3,5,6, crashes with filter==4. Why? Probably because relocations must be applied after the unfilter. It's not because of CRELOC_HAS9A.
 		xor si, si
 		mov ds, bp  ; DS := orig_load_base_CS.
 		mov cx, FILTER_CHANGE_COUNT&0xffff

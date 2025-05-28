@@ -391,11 +391,12 @@ my $c_exesize = length($s);
 my($analyzed_usize, $short_eos_ofs, $max_distance, $lastmoff1, $overlap, $ebb) = analyze_nrv2(substr($s, $cdataskip, $csize), $method);
 die("fatal: bad analyzed NRV2 usize\n") if $analyzed_usize != $usize;
 $csize = $short_eos_ofs;  # Truncate the NRV2 stream to $short_eos_ofs to save up to 5 bytes at the end.
+my $creloc_has9a = 1;  # !! Not always correct.
 {
   my @nasm_cmd = (
       $nasm_prog, "-O0", "-w+orphan-labels", "-f", "bin", "-DUPXEXEFN='$tmpfn'",
       "-DCPU=$cpu", "-DMETHOD=$method", sprintf("-DFILTER=0x%02x", $filter), "-DFILTER_CHANGE_COUNT=$count", "-DCSIZE=$csize", "-DCDATASKIP=$cdataskip", "-DUSIZE=$usize", "-DLASTMOFF1=$lastmoff1", "-DMAXDIST=$max_distance", "-DOVERLAP=$overlap",
-      "-DCRELOC_SIZE=$creloc_size", "-DU_MINALLOC=$minalloc", "-DU_MAXALLOC=$maxalloc", "-DU_SS=$ss", "-DU_SP=$sp", "-DU_IP=$ip", "-DU_CS=$cs", "-DU_BASE_SIZE=$u_base_size",
+      "-DCRELOC_SIZE=$creloc_size", "-DCRELOC_HAS9A=$creloc_has9a", "-DU_MINALLOC=$minalloc", "-DU_MAXALLOC=$maxalloc", "-DU_SS=$ss", "-DU_SP=$sp", "-DU_IP=$ip", "-DU_CS=$cs", "-DU_BASE_SIZE=$u_base_size",
       "-o", $outfn, "--", "nrv2_exe.nasm");
   print(STDERR "info: running NASM to generate final .exe: ", join(" ", map { shq($_) } @nasm_cmd), "\n");
   my $status = system(@nasm_cmd);
