@@ -64,6 +64,8 @@ test "$(sha256sum command.com)" = "c3b5899620d6c58b90727b640bb7bb6a723f6013629c9
 "$perl" -x logod.pl --fofs=0x1e010 winboot.98s IO.SYS.win98sekb.bmp
 "$unexepack" -q winboot.98s IO.SYS.win98sekb.msdcm
 
+"$perl" -x ufepack.pl --upx="$upx" --nasm="$nasm" --186 --filter=0x06 IO.SYS.win98sekb.msdcm IO.SYS.win98sekb.msdcmfx  # Output file IO.SYS.win98sekb.msdcmfx created but not used. The goal is to make it smaller than aPACK output (IO.SYS.win98sekb.msdcmc).
+
 "$apack1p" -q -3 -h IO.SYS.win98sekb.msdcm IO.SYS.win98sekb.msdcmc
 "$upx" --no-lzma --no-reloc --ultra-brute --small -f -q -q -q -o IO.SYS.win98sekb.msdcmx IO.SYS.win98sekb.msdcm
 "$perl" -e 'if (-s($ARGV[0]) < -s($ARGV[1])) { die if !unlink($ARGV[1]) } else { die if !rename($ARGV[1], $ARGV[0]) }' IO.SYS.win98sekb.msdcmc IO.SYS.win98sekb.msdcmx  # Keep the smaller, --apack1p wins here.
