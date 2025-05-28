@@ -61,9 +61,13 @@ M_LZMA          equ 14
 %assign U_SP U_SP
 %assign U_SS U_SS
 %assign OVERLAP OVERLAP
+%assign MAXDIST MAXDIST
 %assign U_BASE_SIZE U_BASE_SIZE
 
 ; ---
+
+bits 16
+cpu CPU
 
 %if CSIZE>0xffff
   %error ERROR_CSIZE_TOO_LARGE_FOR_DECOMPRESSOR CSIZE  ; DO_ADJUST_C_SEG not implemented.
@@ -71,6 +75,16 @@ M_LZMA          equ 14
 %endif
 %if USIZE>0xffff
   %error ERROR_USIZE_TOO_LARGE_FOR_DECOMPRESSOR USIZE  ; DO_ADJUST_U_SEG not implemented.
+  db 1/0
+%endif
+%if METHOD==M_NRV2B_LE16 || METHOD==M_NRV2D_LE16 || METHOD==M_NRV2E_LE16
+  %define BLOCKREG bx
+  %define BLOCKBITC 16
+%elif METHOD==M_NRV2B_8 || METHOD==M_NRV2D_8 || METHOD==M_NRV2E_8
+  %define BLOCKREG bl
+  %define BLOCKBITC 8
+%else
+  %error ERROR_UNSUPPORTED_METHOD METHOD
   db 1/0
 %endif
 
@@ -82,13 +96,6 @@ M_LZMA          equ 14
   times +(%1)-$ times 0 nop
   times -(%1)+$ times 0 nop
 %endm
-
-%macro dbbb 1  ; 3-byte little endian integer.
-  db (%1)&0xff, ((%1)>>8)&0xff, (%1)>>16
-%endm
-
-bits 16
-cpu CPU
 
 exe_header:  ; DOS .exe header: http://justsolve.archiveteam.org/wiki/MS-DOS_EXE
 .signature:	db 'MZ'
@@ -113,6 +120,7 @@ exe_image:
 
 exe_start:  ; Compressed .exe entry point.
 setup_code:
+		; !! Do a simpler copy if the compressed input file (including the decompressor) is short enough.
 		mov cx,  ((copy_source_end-compressed_data+1)>>1)&0x7fff
 		mov si, (((copy_source_end-compressed_data+1)&~1)-2)&0xffff
 		mov di, si
@@ -142,14 +150,21 @@ setup_code:
 		pop ds
 		pop es
 		push ss  ; Will be popped right below by `retf'. Because of this `push ss', OVERLAP, COPY_DELTA and C_SS must correspond to each other.
-		mov bp, AFTER_COPY_OFS  ; Offset of the copy of decompress.start. Also needs this initial value 1 of last_m_off == (BP << 4) - BL.
-		mov bx, 0x8000+(AFTER_COPY_OFS<<4)-1  ; By setting BL correctly, this also takes care of last_m_off := 1.  ; !! Use shorter initialization if no LASTMOFF1.
-		push bp  ; Will be popped right below by `retf'.
+		mov BLOCKREG, 1<<(BLOCKBITC-1)  ; 0x80 or 0x8000.
+%if LASTMOFF1
+		mov bp, -1  ; last_m_off := 1 (-BP).
+%endif
+%if CPU==8086
+		mov ax, ((decompress.start-exe_image)&0xf)
+		push ax  ; Will be popped right below by `retf'.
+%else
+		push byte ((decompress.start-exe_image)&0xf)
+%endif
 		retf
 ; !! For paragraph alignment purposes, make this 5 bytes shorter, move code to decompress_nrv2b_8, skip over first byte `movsb' with `test al, ...'.
 
 align_before_compressed_data:
-		times (exe_image-$)&0xf db 0  ; Currently empty.
+		times (exe_image-$)&0xf db 0  ; !! Get rid of this alignment by making the (long) copy above smarter.
 
 compressed_data:  ; With method M_NRV2B_8.
 		incbin UPXEXEFN, CDATASKIP, CSIZE
@@ -171,105 +186,83 @@ COPY_DELTA equ C_SS-((compressed_data.end-exe_image)>>4)
 %endif
 
 decompress:
-%if METHOD==M_NRV2B_8
-  .decompress_nrv2b_8:
-  .literal:	movsb
+%if METHOD==M_NRV2B_8 || METHOD==M_NRV2B_LE16
+  ; This implementation doesn't work if CSIZE>0xffff or USIZE>0xffff.
+  .literal:	movsb  ; Process an LZSS literal: copy a byte from the input byte stream to the output.
   .start:
-  .x45:		add bh, bh
-		jnz short .x4c
-		call .get_bit
-  .x4c:		jc short .literal
+  .next_token:	call .get_bit  ; Read token type: CF == 0 means match, CF == 1 means literal.
+		jc short .literal
+		; Start reading m_off to CX. CX is 0 now, see `xor cx, cx' above.
+		inc cx  ; CX := 1.
+  .next_m_off_bit:
+		call .read_varint_bit
+		; This finishes the decompression if we've read 16
+		; consecutive 0 bits from the varint (i.e. the first 32 bits
+		; of 000000000000000000000000000000000000000000001001).
+		; This is good enough for outputs smaller than 1<<24 bytes.
+		jcxz .done  ; Would be incorrect with `jecxz'. Correctly increases SI only if compressed data has been processed by `upfx.pl --truncate-nrv2b-le32'.
+		jnc short .next_m_off_bit  ; CF == 0 means continue reading more varint bits.
+		sub cx, byte 3
+		jc short .get_m_len  ; Jump if m_off == 2. (And use -last_m_off in BP for the offset.)
+		mov ah, cl  ; AX := CL<<8; AL := junk.  We store only the lowest word of m_off in AX. This is without overflow, because DO_ADJUST_U_SEG==0 implies USIZE<=0xffff, which implies m_off<0x10000.
+		lodsb  ; Read 8 more bits (m_off_low_byte).
+		not ax  ; AX := -(AX + 1). This completes formula: m_off := m_off_from_varint - 3) * 256 + m_off_low_byte.
+		xchg bp, ax  ; BP := AX; AX := junk. BP becomes the final -last_m_off.
+  .get_m_len:  ; Start reading m_len to CX.
+		xor cx, cx  ; CX := 0, the initial value of m_len.
+		call .read_varint_bit  ; Reads first bit from the bottom of CX.
+		adc cx, cx  ; Reads second bit from the bottom of CX.
+		jnz short .maybe_adjust_m_len
+		; The first 2 bits read were 0, so read a varint (more bits of m_len) into CX.
 		inc cx
-		mov ax, es
-  .x51:		call .read_varint_bit
-		jcxz after_decompress
-		jnc short .x51
-		dec cx
-		dec cx
-		jz short .x68
-  %if CPU==8086
-		add cx, cx
-		add cx, cx
-		add cx, cx
-		add cx, cx
+  .next_m_len_bit:
+		call .read_varint_bit
+		jnc short .next_m_len_bit  ; CF == 0 means continue reading more varint bits.
+		; m_len += 2. (This is part of the NRV2B algorithm.)
+		times 2 inc cx  ; m_len += 2.
+  .maybe_adjust_m_len:  ; if (m_off > 0xd00) { m_len++; } m_len++;
+  %if MAXDIST<0 || MAXDIST>0xd00
+		cmp bp, -0xd00
+		adc cx, byte 1  ; if (m_off > 0xd00) { m_len++; } m_len++;  ; But BP is -last_m_off, so we do the negative.
   %else
-		shl cx, 4
+		inc cx  ; Just do the unconditional m_len++.
   %endif
-		mov bp, cx
-		mov bl, [si]
-		inc si
-		not bl
-		xor cx, cx
-  .x68:		call .read_varint_bit
+  .copy_match:  ; Process an LZSS match: (distance, length) == (last_m_off, m_len) == (CX, -BP) pair by copying an already-built substring of the output.
+		xchg ax, si  ; Save SI; SI := junk.
+		lea si, [di+bp]  ; AX := source offset for the match. BP is now -last_m_off.
+		es rep movsb  ; Copy the an already-built substring of the output. Can overlap itself. Also sets CX := 0 at the end.
+		xchg si, ax  ; Restore SI; AX := junk.
+		jmp short .next_token
+  .read_varint_bit:  ; Reads a bit to CX (shifting it left, setting its low bit). Then it reads the continuation bit to CF.
+		call .get_bit
 		adc cx, cx
-		jnz short .x77
-		inc cx
-  .x70:		call .read_varint_bit
-		jnc short .x70
-		inc cx
-		inc cx
-  .x77:		cmp bp, 0xd1
-		sbb cx, byte -2
-		sub ax, bp
-		jc short .x90
-		mov ds, ax  ; !! File is short, no need to modify segment registers, replace it with a shorter M_NRV2B_8 decompressor.
-		lea ax, [bx+di]
-  .x86:		sub ah, bh
-		xchg ax, si
-		rep movsb
-		xchg ax, si
-		mov ds, dx
-		jmp short .x45
-  .x90:
-  %if CPU==8086
-		add ax, ax
-		add ax, ax
-		add ax, ax
-		add ax, ax
-  %else
-		shl ax, 4
+		; Falls through to .get_bit for reading the continuation bit.
+  .get_bit:  ; Reads a bit from the input bit stream to CF. Ruins AX. Updates BX, reads another block if needd.
+		add BLOCKREG, BLOCKREG
+		jnz short .ret
+		; Now CF == 1, because the highest bit of BLOCKREG was 1 before the `add'.
+  %if BLOCKBITC==8
+		lodsb  ; Read next block to AL.
+  %elif BLOCKBITC==16
+		lodsw  ; Read next block to AX.
   %endif
-  %if CPU==8086
-		push ax
-		xor ax, ax
-		mov ds, ax
-		pop ax
-  %else
-		push byte 0  ; This will put 0 to DS before the `rep movsb'. Is it some kind of wrap-around at 1 MiB? !! TODO(pts): Do we ever need this in practice?
-		pop ds
-  %endif
-		add ax, bx
-		add ax, di
-		jmp short .x86
-  .read_varint_bit:
-		add bh, bh
-		jnz short .xa3
-		call .get_bit
-  .xa3:		adc cx, cx
-		add bh, bh
-		jnz short .xae
-  .get_bit:	mov bh, [si]
-		inc si
-		adc bh, bh
-  .xae:		ret
-%elif METHOD==M_NRV2D_8 || METHOD==M_NRV2E_8  ; !! Implement these, the short version.
-  .decompress_nrv2d_8:
-  .decompress_nrv2e_8:
+		xchg bx, ax  ; BL/BX := new block; AX := junk; higher_bits_of_BX := junk.
+		adc BLOCKREG, BLOCKREG  ; Sets the low bit of BLOCKREG to 1, and also sets CF to the high bit of BLOCKREG. That's becase the shifted-out high bit by the `add BLOCKREG, BLOCKREG' is always 1. This low bit in BLOCKREG will become the shifted-out high bit later.
+  .ret:		ret
+  .done:	; Now we are done with decompression. ES:DI == address of end of uncompressed data output.
+%elif METHOD==M_NRV2D_8 || METHOD==M_NRV2D_LE16 || METHOD==M_NRV2E_8 || METHOD==M_NRV2E_LE16  ; !! Implement these, the short version.
   .start:
   %error ERROR_UNIMPLEMENTED_METHOD METHOD
-  times -1 nop
+  db 1/0
 %else
   .start:
   %error ERROR_UNSUPPORTED_METHOD METHOD
-  times -1 nop
+  db 1/0
 %endif
-
-AFTER_COPY_OFS equ ((compressed_data.end-exe_image)&0xf)+(decompress.start-compressed_data.end)
 
 after_decompress:
 
 unfilter:
-  ; !!! Is it true that total unfilter size (<=26 bytes if FILTER_CHANGE_COUNT<=0xffff) is smaller than decompress size decrease and upx_exe_pack_header size decrease (27 bytes)? If not, we have to increase MINALLOC and C_SS.
 %if FILTER && FILTER_CHANGE_COUNT && 0  ; !! Remove `^&& 0'. !! Untested.
   %if FILTER<1 || FILTER>6
     %error ERROR_UNSUPPORTED_FILTER FILTER
